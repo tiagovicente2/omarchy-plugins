@@ -1,0 +1,415 @@
+#!/usr/bin/python3
+# omarchy:summary=Print the Antigravity (agy) usage record as JSON
+# omarchy:args=[--force] [--limits-only]
+# omarchy:hidden=true
+"""Collect Antigravity (agy) usage into one display-ready JSON record.
+
+Extracts token usage, model stats, and prompt counts from Antigravity's local
+SQLite conversation databases (~/.gemini/antigravity-cli/conversations/*.db).
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import glob
+import json
+import os
+import sqlite3
+import sys
+from pathlib import Path
+from typing import Any
+
+AGENT_ID = "agy"
+AGENT_NAME = "Antigravity"
+AUTH_HELP = "Run `agy` to authenticate."
+
+SCAN_REUSE_SECONDS = 20
+LIMITS_ONLY_REUSE_SECONDS = 900
+
+
+def config_path() -> Path:
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config"))
+    return config_home / "omarchy" / "agents" / f"{AGENT_ID}.json"
+
+
+def read_config() -> dict[str, Any]:
+    p = config_path()
+    if p.is_file():
+        try:
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            pass
+    return {}
+
+
+def parse_token_limit(val: Any, default: int) -> int:
+    if val is None:
+        return default
+    if isinstance(val, (int, float)):
+        return int(val)
+    if isinstance(val, str):
+        val_s = val.strip().lower()
+        multiplier = 1
+        if val_s.endswith("k"):
+            multiplier = 1_000
+            val_s = val_s[:-1]
+        elif val_s.endswith("m"):
+            multiplier = 1_000_000
+            val_s = val_s[:-1]
+        elif val_s.endswith("g") or val_s.endswith("b"):
+            multiplier = 1_000_000_000
+            val_s = val_s[:-1]
+        try:
+            return int(float(val_s) * multiplier)
+        except ValueError:
+            pass
+    return default
+
+
+def cache_file() -> Path:
+    cache_dir = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "omarchy" / "agent-usage"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f"{AGENT_ID}-scan.json"
+
+
+def read_cache(max_age_seconds: int) -> dict[str, Any] | None:
+    path = cache_file()
+    if not path.is_file():
+        return None
+    try:
+        mtime = path.stat().st_mtime
+        if (dt.datetime.now().timestamp() - mtime) > max_age_seconds:
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict) and data.get("schemaVersion") == 1:
+                return data
+    except Exception:
+        pass
+    return None
+
+
+def write_cache(data: dict[str, Any]) -> None:
+    try:
+        path = cache_file()
+        tmp = path.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
+def decode_varint(data: bytes, pos: int) -> tuple[int, int]:
+    val = 0
+    shift = 0
+    while pos < len(data):
+        b = data[pos]
+        pos += 1
+        val |= (b & 0x7F) << shift
+        if not (b & 0x80):
+            return val, pos
+        shift += 7
+    return val, pos
+
+
+def parse_fields(data: bytes) -> dict[int, list[tuple[int, Any]]]:
+    pos = 0
+    fields: dict[int, list[tuple[int, Any]]] = {}
+    while pos < len(data):
+        start_pos = pos
+        key, pos = decode_varint(data, pos)
+        if pos == start_pos:
+            break
+        wire_type = key & 0x7
+        field_num = key >> 3
+        if field_num == 0:
+            break
+        if wire_type == 0:
+            v_start = pos
+            val, pos = decode_varint(data, pos)
+            if pos == v_start:
+                break
+            fields.setdefault(field_num, []).append((0, val))
+        elif wire_type == 1:
+            if pos + 8 > len(data):
+                break
+            val = data[pos : pos + 8]
+            pos += 8
+            fields.setdefault(field_num, []).append((1, val))
+        elif wire_type == 2:
+            v_start = pos
+            length, pos = decode_varint(data, pos)
+            if pos == v_start or pos + length > len(data):
+                break
+            val = data[pos : pos + length]
+            pos += length
+            fields.setdefault(field_num, []).append((2, val))
+        elif wire_type == 5:
+            if pos + 4 > len(data):
+                break
+            val = data[pos : pos + 4]
+            pos += 4
+            fields.setdefault(field_num, []).append((5, val))
+        else:
+            break
+    return fields
+
+
+def get_active_account() -> str:
+    acc_path = os.path.expanduser("~/.gemini/google_accounts.json")
+    if os.path.isfile(acc_path):
+        try:
+            with open(acc_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                email = data.get("active", "")
+                if email:
+                    return email
+        except Exception:
+            pass
+    return "Google AI"
+
+
+def scan_agy_usage() -> dict[str, Any]:
+    now = dt.datetime.now()
+    now_ts = int(now.timestamp())
+    today = now.strftime("%Y-%m-%d")
+    recent_dates = [
+        (now - dt.timedelta(days=offset)).strftime("%Y-%m-%d")
+        for offset in range(6, -1, -1)
+    ]
+    recent_by_day = {day: 0 for day in recent_dates}
+    active_dates: set[str] = set()
+    model_usage: dict[str, dict[str, int]] = {}
+    today_tokens_by_model: dict[str, int] = {}
+    today_prompts = 0
+    today_sessions: set[str] = set()
+    total_prompts = 0
+    total_sessions: set[str] = set()
+
+    # Load custom limits configuration if present
+    config = read_config()
+    session_window_hours = int(config.get("sessionWindowHours", 5))
+    weekly_window_days = int(config.get("weeklyWindowDays", 7))
+    session_limit_tokens = parse_token_limit(config.get("sessionLimitTokens"), 50_000_000)
+    weekly_limit_tokens = parse_token_limit(config.get("weeklyLimitTokens"), 250_000_000)
+
+    session_cutoff = now_ts - session_window_hours * 3600
+    weekly_cutoff = now_ts - weekly_window_days * 86400
+
+    session_turns: list[tuple[int, int]] = []
+    weekly_turns: list[tuple[int, int]] = []
+
+    gemini_dirs = [
+        os.path.expanduser("~/.gemini/antigravity-cli/conversations"),
+        os.path.expanduser("~/.gemini/antigravity/conversations"),
+    ]
+
+    db_paths: list[str] = []
+    for gdir in gemini_dirs:
+        if os.path.isdir(gdir):
+            db_paths.extend(glob.glob(os.path.join(gdir, "*.db")))
+
+    seen_dbs: set[str] = set()
+
+    for db_path in db_paths:
+        real = os.path.realpath(db_path)
+        if real in seen_dbs:
+            continue
+        seen_dbs.add(real)
+        conv_id = os.path.basename(db_path).replace(".db", "")
+        total_sessions.add(conv_id)
+
+        try:
+            con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0)
+            cur = con.cursor()
+
+            step_times: dict[int, int] = {}
+            for idx, stype, meta in cur.execute("SELECT idx, step_type, metadata FROM steps"):
+                if stype == 14:  # user explicit input prompt
+                    total_prompts += 1
+                if meta:
+                    try:
+                        pmeta = parse_fields(meta)
+                        if 1 in pmeta and pmeta[1][0][0] == 2:
+                            pts = parse_fields(pmeta[1][0][1])
+                            if 1 in pts and pts[1][0][0] == 0:
+                                sec = pts[1][0][1]
+                                step_times[idx] = sec
+                                d_str = dt.datetime.fromtimestamp(sec).strftime("%Y-%m-%d")
+                                if stype == 14 and d_str == today:
+                                    today_prompts += 1
+                    except Exception:
+                        pass
+
+            for idx, gdata in cur.execute("SELECT idx, data FROM gen_metadata WHERE data IS NOT NULL"):
+                try:
+                    pb = parse_fields(gdata)
+                    if 1 not in pb or pb[1][0][0] != 2:
+                        continue
+                    pb1 = parse_fields(pb[1][0][1])
+                    raw_model = "gemini-3.7-flash"
+                    if 19 in pb1 and pb1[19][0][0] == 2:
+                        try:
+                            raw_model = pb1[19][0][1].decode("utf-8", errors="ignore")
+                        except Exception:
+                            pass
+
+                    last_step = None
+                    if 20 in pb1:
+                        for _, item in pb1[20]:
+                            if isinstance(item, bytes):
+                                pitem = parse_fields(item)
+                                if 1 in pitem and 2 in pitem:
+                                    k_name = pitem[1][0][1] if pitem[1][0][0] == 2 else b""
+                                    if k_name == b"last_step_index":
+                                        try:
+                                            last_step = int(pitem[2][0][1])
+                                        except Exception:
+                                            pass
+
+                    sec = step_times.get(last_step, step_times.get(idx, int(os.path.getmtime(db_path))))
+                    day_str = dt.datetime.fromtimestamp(sec).strftime("%Y-%m-%d")
+
+                    in_t = out_t = cache_t = 0
+                    if 17 in pb1 and pb1[17][0][0] == 2:
+                        f17 = parse_fields(pb1[17][0][1])
+                        if 2 in f17 and f17[2][0][0] == 2:
+                            f17_2 = parse_fields(f17[2][0][1])
+                            if 2 in f17_2 and f17_2[2][0][0] == 0:
+                                in_t = f17_2[2][0][1]
+                            if 3 in f17_2 and f17_2[3][0][0] == 0:
+                                out_t = f17_2[3][0][1]
+                            if 5 in f17_2 and f17_2[5][0][0] == 0:
+                                cache_t = f17_2[5][0][1]
+
+                    total_turn = in_t + out_t + cache_t
+                    if total_turn > 0:
+                        active_dates.add(day_str)
+                        if day_str in recent_by_day:
+                            recent_by_day[day_str] += total_turn
+                        if day_str == today:
+                            today_sessions.add(conv_id)
+                            today_tokens_by_model[raw_model] = (
+                                today_tokens_by_model.get(raw_model, 0) + total_turn
+                            )
+
+                        if sec >= session_cutoff:
+                            session_turns.append((sec, total_turn))
+                        if sec >= weekly_cutoff:
+                            weekly_turns.append((sec, total_turn))
+
+                        bucket = model_usage.setdefault(
+                            raw_model,
+                            {
+                                "inputTokens": 0,
+                                "outputTokens": 0,
+                                "cacheReadInputTokens": 0,
+                                "cacheCreationInputTokens": 0,
+                            },
+                        )
+                        bucket["inputTokens"] += in_t
+                        bucket["outputTokens"] += out_t
+                        bucket["cacheReadInputTokens"] += cache_t
+                except Exception:
+                    pass
+            con.close()
+        except Exception:
+            pass
+
+    recent_days = [{"date": d, "messageCount": recent_by_day[d]} for d in recent_dates]
+    today_total = sum(today_tokens_by_model.values())
+    tier_label = get_active_account()
+
+    limits = []
+
+    # Rolling session limit
+    if session_limit_tokens > 0:
+        session_tokens_sum = sum(t[1] for t in session_turns)
+        session_percent = round(session_tokens_sum / session_limit_tokens, 4)
+        if session_turns:
+            oldest_s = min(t[0] for t in session_turns)
+            reset_s = oldest_s + session_window_hours * 3600
+            session_reset_iso = dt.datetime.fromtimestamp(reset_s, tz=dt.timezone.utc).isoformat()
+        else:
+            session_reset_iso = dt.datetime.fromtimestamp(now_ts + session_window_hours * 3600, tz=dt.timezone.utc).isoformat()
+
+        limits.append({
+            "label": f"Session ({session_window_hours}-hour)",
+            "percent": min(1.0, session_percent),
+            "resetsAt": session_reset_iso,
+        })
+
+    # Rolling weekly limit
+    if weekly_limit_tokens > 0:
+        weekly_tokens_sum = sum(t[1] for t in weekly_turns)
+        weekly_percent = round(weekly_tokens_sum / weekly_limit_tokens, 4)
+        if weekly_turns:
+            oldest_w = min(t[0] for t in weekly_turns)
+            reset_w = oldest_w + weekly_window_days * 86400
+            weekly_reset_iso = dt.datetime.fromtimestamp(reset_w, tz=dt.timezone.utc).isoformat()
+        else:
+            weekly_reset_iso = dt.datetime.fromtimestamp(now_ts + weekly_window_days * 86400, tz=dt.timezone.utc).isoformat()
+
+        limits.append({
+            "label": f"Weekly ({weekly_window_days}-day)",
+            "percent": min(1.0, weekly_percent),
+            "resetsAt": weekly_reset_iso,
+        })
+
+    record = {
+        "schemaVersion": 1,
+        "id": AGENT_ID,
+        "name": AGENT_NAME,
+        "updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "ready": True,
+        "hasLocalStats": True,
+        "todayPrompts": today_prompts,
+        "todaySessions": len(today_sessions),
+        "todayTotalTokens": today_total,
+        "todayTokensByModel": today_tokens_by_model,
+        "recentDays": recent_days,
+        "totalPrompts": total_prompts,
+        "totalSessions": len(total_sessions),
+        "activeDays": len(active_dates),
+        "activeDates": sorted(list(active_dates)),
+        "modelUsage": model_usage,
+        "limits": limits,
+        "tierLabel": tier_label,
+        "usageStatusText": "",
+        "authHelpText": AUTH_HELP,
+    }
+
+    return record
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Antigravity usage collector")
+    parser.add_argument("--force", action="store_true", help="Force rescan")
+    parser.add_argument("--limits-only", action="store_true", help="Reuse cached scan if possible")
+    args = parser.parse_args()
+
+    max_age = SCAN_REUSE_SECONDS
+    if args.limits_only:
+        max_age = LIMITS_ONLY_REUSE_SECONDS
+    if args.force:
+        max_age = 0
+
+    cached = read_cache(max_age) if max_age > 0 else None
+    if cached:
+        json.dump(cached, sys.stdout)
+        sys.stdout.write("\n")
+        return
+
+    record = scan_agy_usage()
+    write_cache(record)
+    json.dump(record, sys.stdout)
+    sys.stdout.write("\n")
+
+
+if __name__ == "__main__":
+    main()
