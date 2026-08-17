@@ -4,17 +4,17 @@ Multi-agent AI coding subscription monitor, token usage fuel gauges, and pacing 
 
 ---
 
-## ✨ Features
+## Features
 
-- **🤖 Multi-Agent Support**: Native rate-limit and token metrics for **Claude Code**, **OpenAI Codex**, **Antigravity (AGY)**, and **Fireworks**.
-- **⛽ Fuel-Gauge Meters**: Real-time visualization of current session limits, 7-day allowances, and credit balances.
-- **📊 Usage Breakdown**: Daily token bar charts and model breakdown with input/output/cache splits.
-- **🔄 Synced Aggregation**: Optional cross-device usage aggregation across laptop and desktop workstations.
-- **👻 Self-Hiding**: Hides automatically from the bar if no AI subscriptions or usage are detected on the system.
+- **Multi-Agent Support**: Native rate-limit and token metrics for **Claude Code**, **OpenAI Codex**, **Antigravity (AGY)**, and **Fireworks**.
+- **Fuel-Gauge Meters**: Real-time visualization of current session limits, 7-day allowances, and credit balances.
+- **Usage Breakdown**: Daily token bar charts and model breakdown with input/output/cache splits.
+- **Synced Aggregation**: Optional cross-device usage aggregation across laptop and desktop workstations.
+- **Self-Hiding**: Hides automatically from the bar if no AI subscriptions or usage are detected on the system.
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### From Monorepo (Dotfiles)
 
@@ -39,7 +39,7 @@ omarchy-shell shell rescanPlugins
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
 Configure the widget in `~/.config/omarchy/shell.json` or via the Omarchy CLI:
 
@@ -54,7 +54,7 @@ omarchy bar set omarchy-agents syncDir "~/Sync/agent-usage"
 
 ---
 
-## ⌨️ Interactions & IPC
+## Interactions & IPC
 
 - **Left-Click**: Open agent details panel.
 - **Middle-Click**: Switch to the next enabled agent subscription.
@@ -68,6 +68,6 @@ omarchy bar set omarchy-agents syncDir "~/Sync/agent-usage"
 
 ---
 
-## 📄 License
+## License
 
 [MIT](LICENSE)

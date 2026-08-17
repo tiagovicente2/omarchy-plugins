@@ -4,19 +4,19 @@ RGB keyboard backlight control service and tray control panel for **ASUS Vivoboo
 
 ---
 
-## ✨ Features
+## Features
 
-- **🎨 Modern Control Panel**: 12 curated color presets, custom hex input with validation, and smooth brightness slider.
-- **󰏘 Dynamic Theme Tracking**: Real-time sync with your active Omarchy theme, with an instant toggle between Theme Accent and Bar Text color.
-- **🌈 Smooth Rainbow Spectrum**: Animated color cycling mode with fluid transitions.
-- **⌨️ Dynamic Tray Icon**: 22×22 StatusNotifierItem icon rendered via Cairo matching current color and backlight state.
-- **⚡ Hardware Hotkey Sync**: Bidirectional sync with laptop brightness hotkeys (<kbd>Fn</kbd>+<kbd>F7</kbd> / <kbd>Fn</kbd>+<kbd>F4</kbd>).
-- **🔋 Battery Saver & Night Light**: Automatically caps brightness to 33% on low battery and applies zero-blue amber tint during Night Light.
-- **💾 Boot Persistence**: Automatically restores your configured colors and mode across reboots.
+- **Modern Control Panel**: 12 curated color presets, custom hex input with validation, and smooth brightness slider.
+- **Dynamic Theme Tracking**: Real-time sync with your active Omarchy theme, with an instant toggle between Theme Accent and Bar Text color.
+- **Smooth Rainbow Spectrum**: Animated color cycling mode with fluid transitions.
+- **Dynamic Tray Icon**: 22×22 StatusNotifierItem icon rendered via Cairo matching current color and backlight state.
+- **Hardware Hotkey Sync**: Bidirectional sync with laptop brightness hotkeys (<kbd>Fn</kbd>+<kbd>F7</kbd> / <kbd>Fn</kbd>+<kbd>F4</kbd>).
+- **Battery Saver & Night Light**: Automatically caps brightness to 33% on low battery and applies zero-blue amber tint during Night Light.
+- **Boot Persistence**: Automatically restores your configured colors and mode across reboots.
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### From Monorepo (Dotfiles)
 
@@ -38,7 +38,7 @@ omarchy-shell shell rescanPlugins
 
 ---
 
-## ⚙️ Prerequisites
+## Prerequisites
 
 Ensure **VRGB** and the ASUS WMI kernel module are enabled:
 
@@ -57,7 +57,7 @@ echo asus-nb-wmi | sudo tee /etc/modules-load.d/asus-nb-wmi.conf
 
 ---
 
-## ⌨️ CLI & Keybindings
+## CLI & Keybindings
 
 Control `omarchy-kbd-rgb` from terminal scripts or Hyprland keybindings:
 
@@ -75,6 +75,6 @@ omarchy-shell omarchy-kbd-rgb status                   # Output JSON status
 
 ---
 
-## 📄 License
+## License
 
 [MIT](LICENSE)

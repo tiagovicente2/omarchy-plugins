@@ -4,16 +4,16 @@ An Omarchy Shell power-panel replacement with an **80% Battery Protection** togg
 
 ---
 
-## ✨ Features
+## Features
 
-- **🛡️ 80% / 100% Threshold Switch**: Set maximum charge limit to 80% to preserve battery lifespan, or 100% for maximum runtime.
-- **⚡ Password-Free Switching**: Active local users can toggle limits seamlessly via a secure, restricted Polkit rule.
-- **💾 Boot Persistence**: Automatically restores your configured charge limit across reboots and system resume.
-- **📊 Native Power Profiles**: Retains stock Omarchy battery statistics, health monitoring, and system power profiles.
+- **80% / 100% Threshold Switch**: Set maximum charge limit to 80% to preserve battery lifespan, or 100% for maximum runtime.
+- **Password-Free Switching**: Active local users can toggle limits seamlessly via a secure, restricted Polkit rule.
+- **Boot Persistence**: Automatically restores your configured charge limit across reboots and system resume.
+- **Native Power Profiles**: Retains stock Omarchy battery statistics, health monitoring, and system power profiles.
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### From Monorepo (Dotfiles)
 
@@ -38,7 +38,7 @@ omarchy-shell shell rescanPlugins
 
 ---
 
-## 🔄 Updates & Maintenance
+## Updates & Maintenance
 
 When updating the plugin, rerun the helper if the privileged backend changes:
 
@@ -48,7 +48,7 @@ When updating the plugin, rerun the helper if the privileged backend changes:
 
 ---
 
-## 🗑️ Uninstallation
+## Uninstallation
 
 ```bash
 # 1. Reset battery charge limit to 100%
@@ -70,6 +70,6 @@ omarchy-shell shell rescanPlugins
 
 ---
 
-## 📄 License
+## License
 
 [MIT](LICENSE)

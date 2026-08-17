@@ -4,7 +4,7 @@ A unified collection of personal shell plugins and bar widgets for [Omarchy](htt
 
 ---
 
-## 🧩 Included Plugins
+## Included Plugins
 
 | Plugin | ID | Kind | Description |
 | :--- | :--- | :--- | :--- |
@@ -15,7 +15,7 @@ A unified collection of personal shell plugins and bar widgets for [Omarchy](htt
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### Automated with Dotfiles
 
@@ -48,6 +48,6 @@ omarchy-shell shell rescanPlugins
 
 ---
 
-## 📄 License
+## License
 
 All plugins in this repository are distributed under the [MIT License](LICENSE).

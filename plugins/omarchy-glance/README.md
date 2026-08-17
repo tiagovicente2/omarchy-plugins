@@ -4,16 +4,16 @@ Centered calendar, Caldir agenda, and interactive notification history panel for
 
 ---
 
-## ✨ Features
+## Features
 
-- **📅 Centered Bar Widget**: Clean time and date display designed to act as the primary center anchor on your bar.
-- **🗓️ Caldir Agenda Sync**: Automatically discovers, expands, and displays upcoming calendar events with direct **Join** links (Meet, Teams, Zoom).
-- **🔔 Notification History**: Recent notifications drawer with quick actions and one-click **Dismiss all**.
-- **⏳ Year & Life Progress**: Optional visual progress bars tracking the current year and milestones.
+- **Centered Bar Widget**: Clean time and date display designed to act as the primary center anchor on your bar.
+- **Caldir Agenda Sync**: Automatically discovers, expands, and displays upcoming calendar events with direct **Join** links (Meet, Teams, Zoom).
+- **Notification History**: Recent notifications drawer with quick actions and one-click **Dismiss all**.
+- **Year & Life Progress**: Optional visual progress bars tracking the current year and milestones.
 
 ---
 
-## 📦 Installation
+## Installation
 
 ### From Monorepo (Dotfiles)
 
@@ -38,7 +38,7 @@ omarchy-shell shell rescanPlugins
 
 ---
 
-## ⚙️ Prerequisites & Calendar Setup
+## Prerequisites & Calendar Setup
 
 Glance synchronizes events via the standard Caldir RFC5545 format:
 
@@ -51,7 +51,7 @@ Glance synchronizes events via the standard Caldir RFC5545 format:
 
 ---
 
-## ⌨️ Keybindings
+## Keybindings
 
 To toggle Glance with <kbd>SUPER</kbd> + <kbd>V</kbd>, add to `~/.config/hypr/bindings.lua`:
 
@@ -68,6 +68,6 @@ hyprctl reload
 
 ---
 
-## 📄 License
+## License
 
 [MIT](LICENSE)
