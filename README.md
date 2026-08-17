@@ -1,37 +1,53 @@
 # Omarchy Plugins
 
-Collection of personal and community shell plugins and bar widgets for [Omarchy](https://omarchy.org/).
+A unified collection of personal shell plugins and bar widgets for [Omarchy](https://omarchy.org/).
 
-## Included Plugins
+---
 
-| Plugin | ID | Type | Description |
+## 🧩 Included Plugins
+
+| Plugin | ID | Kind | Description |
 | :--- | :--- | :--- | :--- |
-| [**Battery Protection**](plugins/battery-protection) | `battery-protection` | Bar Widget | Omarchy power panel with an 80% battery protection threshold toggle and power profile switching. |
-| [**Omarchy Glance**](plugins/omarchy-glance) | `omarchy-glance` | Bar Widget | Centered calendar, Caldir agenda, and interactive notification history panel. |
-| [**Keyboard RGB**](plugins/omarchy-kbd-rgb) | `omarchy-kbd-rgb` | Background Service | ASUS Vivobook keyboard RGB control from a system tray icon via HID LampArray (VRGB), with boot persistence. |
-| [**Omarchy Agents**](plugins/omarchy-agents) | `omarchy-agents` | Bar Widget | Rate-limit meters, pacing, and model usage breakdowns for Claude Code, Codex, AGY, and Fireworks. |
+| [**Battery Protection**](plugins/battery-protection) | `battery-protection` | Bar Widget | 80% charge threshold protection toggle and power profile management. |
+| [**Omarchy Glance**](plugins/omarchy-glance) | `omarchy-glance` | Bar Widget | Centered calendar, Caldir agenda sync with video links, and notification history drawer. |
+| [**Keyboard RGB**](plugins/omarchy-kbd-rgb) | `omarchy-kbd-rgb` | Background Service | ASUS Vivobook RGB backlight tray controller (HID LampArray via VRGB) with dynamic theme sync. |
+| [**Omarchy Agents**](plugins/omarchy-agents) | `omarchy-agents` | Bar Widget | Multi-agent token usage meters, rate limits, and pacing for Claude, Codex, AGY, and Fireworks. |
 
-## Installation
+---
 
-### With Dotfiles
+## 📦 Installation
 
-Managed automatically via the Omarchy package installer:
+### Automated with Dotfiles
+
+Managed automatically via the personal dotfiles package installer:
 
 ```bash
 install-omarchy-plugins
 ```
 
-### Manual Symlink / Development
+### Manual Installation (All Plugins)
 
-To link all plugins directly into your active Omarchy environment:
+To install or link all plugins into your Omarchy environment at once:
 
 ```bash
-for plugin in plugins/*/; do
-  ln -snf "$(pwd)/${plugin%/}" ~/.config/omarchy/plugins/"$(basename "$plugin")"
+# 1. Clone the monorepo
+git clone https://github.com/tiagovicente2/omarchy-plugins.git ~/Projects/omarchy-plugins
+
+# 2. Symlink each plugin into Omarchy's config
+for plugin in ~/Projects/omarchy-plugins/plugins/*/; do
+  ln -sfn "$plugin" ~/.config/omarchy/plugins/"$(basename "$plugin")"
 done
+
+# 3. Run helper scripts
+~/.config/omarchy/plugins/battery-protection/install-helper.sh
+~/.config/omarchy/plugins/omarchy-agents/install-helper.sh
+
+# 4. Rescan Omarchy plugins
 omarchy-shell shell rescanPlugins
 ```
 
-## License
+---
 
-MIT License. See individual plugin directories for details.
+## 📄 License
+
+All plugins in this repository are distributed under the [MIT License](LICENSE).
