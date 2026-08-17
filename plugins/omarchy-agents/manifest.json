@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "id": "tiago.agents",
-  "name": "My Agents",
+  "id": "omarchy-agents",
+  "name": "Omarchy Agents",
   "version": "1.0.0",
-  "author": "Omarchy",
+  "author": "Tiago Vicente",
   "license": "MIT",
   "description": "Claude Code, Codex, and Fireworks usage, limits, and pace in a native Omarchy bar panel.",
   "kinds": [

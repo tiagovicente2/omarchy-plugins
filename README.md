@@ -9,7 +9,7 @@ Collection of personal and community shell plugins and bar widgets for [Omarchy]
 | [**Battery Protection**](plugins/battery-protection) | `battery-protection` | Bar Widget | Omarchy power panel with an 80% battery protection threshold toggle and power profile switching. |
 | [**Omarchy Glance**](plugins/omarchy-glance) | `omarchy-glance` | Bar Widget | Centered calendar, Caldir agenda, and interactive notification history panel. |
 | [**Keyboard RGB**](plugins/omarchy-kbd-rgb) | `omarchy-kbd-rgb` | Background Service | ASUS Vivobook keyboard RGB control from a system tray icon via HID LampArray (VRGB), with boot persistence. |
-| [**My Agents**](plugins/tiago.agents) | `tiago.agents` | Bar Widget | Rate-limit meters, pacing, and model usage breakdowns for Claude Code, Codex, AGY, and Fireworks. |
+| [**Omarchy Agents**](plugins/omarchy-agents) | `omarchy-agents` | Bar Widget | Rate-limit meters, pacing, and model usage breakdowns for Claude Code, Codex, AGY, and Fireworks. |
 
 ## Installation
 
