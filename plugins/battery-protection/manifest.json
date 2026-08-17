@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "battery-protection",
+  "name": "Battery Protection",
+  "version": "1.0.0",
+  "author": "Tiago Vicente",
+  "license": "MIT",
+  "description": "Omarchy power panel with an 80% battery protection toggle",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Battery Protection",
+    "description": "Battery stats, charge limit, and power profiles",
+    "category": "System",
+    "allowMultiple": false
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.power"
+  }
+}

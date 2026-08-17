@@ -1,0 +1,14 @@
+[Unit]
+Description=Restore the saved battery charge limit
+ConditionPathExists=/etc/battery-protection.conf
+After=systemd-modules-load.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/battery-protection restore
+Restart=on-failure
+RestartSec=30s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,244 @@
+#!/bin/bash
+set -euo pipefail
+
+power_supply_path="${BATTERY_PROTECTION_POWER_SUPPLY_PATH:-/sys/class/power_supply}"
+state_file="${BATTERY_PROTECTION_STATE_FILE:-/etc/battery-protection.conf}"
+lock_file="${BATTERY_PROTECTION_LOCK_FILE:-/run/lock/battery-protection.lock}"
+action="${1:-}"
+protocol_version=3
+previous_limits=()
+lock_acquired=false
+
+find_batteries() {
+  shopt -s nullglob
+  batteries=("$power_supply_path"/BAT*)
+  (( ${#batteries[@]} > 0 )) || {
+    echo "No battery found" >&2
+    return 1
+  }
+}
+
+find_thresholds() {
+  local access="${1:-read}"
+
+  find_batteries || return 1
+  thresholds=()
+  for battery in "${batteries[@]}"; do
+    threshold="$battery/charge_control_end_threshold"
+    if [[ ! -r $threshold || $access == "write" && ! -w $threshold ]]; then
+      echo "Battery $(basename "$battery") does not expose a usable charge threshold" >&2
+      return 1
+    fi
+    thresholds+=("$threshold")
+  done
+}
+
+acquire_lock() {
+  local mode="${1:-exclusive}"
+
+  lock_acquired=false
+  if [[ $mode == "shared" ]]; then
+    # An unprivileged first read cannot create a file in /run/lock. Callers
+    # verify that the lock still does not exist after reading; if a first
+    # writer created it concurrently, they retry while holding a shared lock.
+    [[ -e $lock_file ]] || return 0
+    if [[ ! -r $lock_file ]]; then
+      echo "Battery protection lock is not readable" >&2
+      return 1
+    fi
+    exec 9<"$lock_file"
+    flock -s 9
+  else
+    exec 9>"$lock_file"
+    (( EUID != 0 )) || chmod 0644 "$lock_file"
+    flock -x 9
+  fi
+  lock_acquired=true
+}
+
+read_limit() {
+  local limit
+
+  find_thresholds read || return 1
+  limit=$(<"${thresholds[0]}")
+  for threshold in "${thresholds[@]:1}"; do
+    if [[ $(<"$threshold") != "$limit" ]]; then
+      echo "Battery charge thresholds do not match" >&2
+      return 1
+    fi
+  done
+  printf '%s\n' "$limit"
+}
+
+read_battery_state() {
+  local battery_state
+  local has_charging=false
+  local has_discharging=false
+  local has_idle=false
+  local has_full=false
+  local has_unknown=false
+
+  find_batteries || return 1
+  for battery in "${batteries[@]}"; do
+    if [[ ! -r $battery/status ]]; then
+      has_unknown=true
+      continue
+    fi
+    battery_state=$(<"$battery/status")
+    case "$battery_state" in
+      Charging) has_charging=true ;;
+      Discharging) has_discharging=true ;;
+      "Not charging") has_idle=true ;;
+      Full) has_full=true ;;
+      *) has_unknown=true ;;
+    esac
+  done
+
+  if [[ $has_unknown == true || $has_charging == true && $has_discharging == true ]]; then
+    printf 'Unknown\n'
+  elif [[ $has_charging == true ]]; then
+    printf 'Charging\n'
+  elif [[ $has_discharging == true ]]; then
+    printf 'Discharging\n'
+  elif [[ $has_idle == true ]]; then
+    printf 'Not charging\n'
+  elif [[ $has_full == true ]]; then
+    printf 'Full\n'
+  else
+    printf 'Unknown\n'
+  fi
+}
+
+write_limit() {
+  local limit="$1"
+  local index
+  local rollback_index
+
+  find_thresholds write || return 1
+
+  previous_limits=()
+  for threshold in "${thresholds[@]}"; do
+    previous_limits+=("$(<"$threshold")")
+  done
+
+  for index in "${!thresholds[@]}"; do
+    if ! printf '%s' "$limit" > "${thresholds[$index]}"; then
+      for (( rollback_index = 0; rollback_index < index; rollback_index++ )); do
+        printf '%s' "${previous_limits[$rollback_index]}" > "${thresholds[$rollback_index]}" || true
+      done
+      echo "Could not update every battery charge threshold" >&2
+      return 1
+    fi
+  done
+}
+
+rollback_limits() {
+  local index
+  local failed=0
+
+  for index in "${!thresholds[@]}"; do
+    if ! printf '%s' "${previous_limits[$index]}" > "${thresholds[$index]}"; then
+      failed=1
+    fi
+  done
+  return "$failed"
+}
+
+persist_limit() {
+  local limit="$1"
+  local temporary
+
+  temporary=$(mktemp "${state_file}.tmp.XXXXXX") || return 1
+  if ! printf '%s\n' "$limit" > "$temporary" || ! chmod 0644 "$temporary"; then
+    rm -f "$temporary"
+    return 1
+  fi
+  if (( EUID == 0 )) && ! chown root:root "$temporary"; then
+    rm -f "$temporary"
+    return 1
+  fi
+  if ! mv -f "$temporary" "$state_file"; then
+    rm -f "$temporary"
+    return 1
+  fi
+}
+
+set_limit() {
+  local limit="$1"
+
+  write_limit "$limit" || return 1
+  if persist_limit "$limit"; then
+    return 0
+  fi
+
+  if rollback_limits; then
+    echo "Could not persist the battery charge limit; restored the previous threshold" >&2
+  else
+    echo "Could not persist the battery charge limit and could not restore every previous threshold" >&2
+  fi
+  return 1
+}
+
+read_consistent_limit() {
+  local limit
+
+  while true; do
+    acquire_lock shared
+    limit=$(read_limit) || return 1
+    if [[ $lock_acquired == true || ! -e $lock_file ]]; then
+      printf '%s\n' "$limit"
+      return 0
+    fi
+  done
+}
+
+read_consistent_status() {
+  local limit
+  local state
+
+  while true; do
+    acquire_lock shared
+    limit=$(read_limit) || return 1
+    state=$(read_battery_state) || return 1
+    if [[ $lock_acquired == true || ! -e $lock_file ]]; then
+      printf 'version\t%s\n' "$protocol_version"
+      printf 'threshold\t%s\n' "$limit"
+      printf 'state\t%s\n' "$state"
+      return 0
+    fi
+  done
+}
+
+case "$action" in
+  80|100)
+    acquire_lock exclusive
+    set_limit "$action"
+    ;;
+  get)
+    read_consistent_limit
+    ;;
+  status)
+    read_consistent_status
+    ;;
+  version)
+    printf '%s\n' "$protocol_version"
+    ;;
+  restore)
+    [[ -r $state_file ]] || exit 0
+    acquire_lock exclusive
+    limit=$(<"$state_file")
+    case "$limit" in
+      80|100) ;;
+      *)
+        echo "Invalid saved battery charge limit: $limit" >&2
+        exit 1
+        ;;
+    esac
+
+    write_limit "$limit"
+    ;;
+  *)
+    echo "Usage: battery-protection {80|100|get|status|version|restore}" >&2
+    exit 2
+    ;;
+esac
