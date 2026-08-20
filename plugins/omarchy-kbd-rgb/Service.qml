@@ -29,6 +29,7 @@ Item {
   property bool nightLightSync: false
   property string savedPreNightLightHex: ""
   property int savedPreBatterySaverBrightness: -1
+  property bool isBatterySaverIdled: false
   property bool opened: false
   property bool persistOnIdle: false
   property var queue: []
@@ -37,6 +38,8 @@ Item {
 
   readonly property var nightlightService: shell ? shell.firstPartyServiceFor("omarchy.nightlight") : null
   readonly property bool isNightlightActive: !!(nightlightService && nightlightService.enabled)
+  readonly property bool isNightLightEffective: root.nightLightSync && root.isNightlightActive && root.mode !== "off"
+  readonly property string activeDisplayHex: root.isNightLightEffective ? root.nightLightHex : root.hex
 
   readonly property string pluginDir: {
     var dir = root.manifest && root.manifest.__sourceDir
@@ -49,6 +52,7 @@ Item {
 
   readonly property string tooltip: {
     if (root.mode === "off") return "Keyboard: Off"
+    if (root.isNightLightEffective) return "Keyboard: #" + root.nightLightHex + " (" + root.brightness + "%) (Night Light)"
     if (root.mode === "rainbow") return "Keyboard: Rainbow (" + root.brightness + "%)"
     var suffix = root.followTheme ? (root.themeTarget === "foreground" ? " (Theme Text)" : " (Theme Accent)") : ""
     return "Keyboard: #" + root.hex.toUpperCase() + " (" + root.brightness + "%)" + suffix
@@ -56,6 +60,7 @@ Item {
 
   readonly property string modeLabel: {
     if (root.mode === "off") return "Off"
+    if (root.isNightLightEffective) return "Night Light"
     if (root.mode === "rainbow") return "Rainbow"
     if (root.followTheme) return root.themeTarget === "foreground" ? "Theme (Text)" : "Theme (Accent)"
     return "Static"
@@ -107,46 +112,75 @@ Item {
   // Night Light warm tint synchronization (uses pure warm amber FF7700 with zero blue light)
   readonly property string nightLightHex: "FF7700"
 
-  onIsNightlightActiveChanged: {
-    if (!root.nightLightSync || !root.settingsLoaded || root.hydrating) return
-    if (root.isNightlightActive && root.mode !== "off") {
+  onIsNightLightEffectiveChanged: {
+    if (!root.settingsLoaded || root.hydrating) return
+    if (root.isNightLightEffective) {
       if (root.savedPreNightLightHex === "") {
         root.savedPreNightLightHex = root.hex
       }
-      var cmd = ["vrgb", "set", root.nightLightHex, String(root.brightness)]
-      enqueue(cmd)
-      if (sniProc.running) {
-        sniProc.write("mode static " + root.nightLightHex + "\n")
-        sniProc.write("tooltip Keyboard: #" + root.nightLightHex + " (" + root.brightness + "%) (Night Light)\n")
-      }
-    } else if (!root.isNightlightActive && root.savedPreNightLightHex !== "") {
+      apply()
+    } else {
       root.savedPreNightLightHex = ""
-      if (root.followTheme) {
+      if (root.followTheme && root.mode !== "off" && root.mode !== "rainbow") {
         root.applyThemeAccent()
       } else {
-        root.apply()
+        apply()
       }
     }
   }
 
-  // Battery Saver (cap brightness on low battery)
+  // Battery Saver (cap brightness on low battery & 15s idle timeout)
   readonly property bool isLowBattery: {
     var dev = UPower.displayDevice
     return !!(UPower.onBattery && dev && dev.isPresent && dev.percentage <= 25)
   }
 
-  onIsLowBatteryChanged: {
-    if (!root.batterySaver || !root.settingsLoaded || root.hydrating) return
-    if (root.isLowBattery && root.mode !== "off") {
+  function updateBatterySaverBrightness() {
+    if (!root.settingsLoaded || root.hydrating) return
+    if (root.batterySaver && root.isLowBattery && root.mode !== "off") {
       if (root.savedPreBatterySaverBrightness < 0) {
         root.savedPreBatterySaverBrightness = root.brightness
       }
       if (root.brightness > 33) {
         root.setBrightness(33)
       }
-    } else if (!root.isLowBattery && root.savedPreBatterySaverBrightness >= 0) {
+    } else if ((!root.batterySaver || !root.isLowBattery) && root.savedPreBatterySaverBrightness >= 0) {
       root.setBrightness(root.savedPreBatterySaverBrightness)
       root.savedPreBatterySaverBrightness = -1
+    }
+  }
+
+  onIsLowBatteryChanged: updateBatterySaverBrightness()
+
+  IdleMonitor {
+    id: batterySaverIdleMonitor
+    enabled: root.batterySaver && root.mode !== "off"
+    timeout: 15
+    respectInhibitors: true
+    onIsIdleChanged: root.handleBatterySaverIdleChanged()
+  }
+
+  function handleBatterySaverIdleChanged() {
+    if (!root.batterySaver || root.mode === "off") {
+      if (root.isBatterySaverIdled) {
+        root.isBatterySaverIdled = false
+        apply()
+      }
+      return
+    }
+
+    if (batterySaverIdleMonitor.isIdle) {
+      root.isBatterySaverIdled = true
+      enqueue(["vrgb", "off"])
+    } else {
+      if (root.isBatterySaverIdled) {
+        root.isBatterySaverIdled = false
+        if (root.followTheme && root.mode !== "off" && root.mode !== "rainbow") {
+          root.applyThemeAccent()
+        } else {
+          apply()
+        }
+      }
     }
   }
 
@@ -173,7 +207,7 @@ Item {
     id: rainbowTimer
     interval: 80
     repeat: true
-    running: root.mode === "rainbow"
+    running: root.mode === "rainbow" && !root.isBatterySaverIdled && !root.isNightLightEffective
     onTriggered: {
       root.rainbowHue = (root.rainbowHue + 3) % 360
       var currentHex = Model.hsvToHex(root.rainbowHue, 1.0, 1.0)
@@ -184,9 +218,18 @@ Item {
   }
 
   function apply() {
+    if (root.isBatterySaverIdled) {
+      root.persistOnIdle = true
+      syncHwBrightnessToHelper()
+      scheduleSettingsSave()
+      return
+    }
+
     var cmd
     if (root.mode === "off") {
       cmd = ["vrgb", "off"]
+    } else if (root.isNightLightEffective) {
+      cmd = ["vrgb", "set", root.nightLightHex, String(root.brightness)]
     } else if (root.mode === "rainbow") {
       var rainbowHex = Model.hsvToHex(root.rainbowHue, 1.0, 1.0)
       root.hex = rainbowHex
@@ -204,8 +247,12 @@ Item {
 
   function setHex(next) {
     if (!Model.validHex(next)) return
+    root.isBatterySaverIdled = false
     var normalized = Model.normalizeHex(next)
     root.hex = normalized
+    if (root.savedPreNightLightHex !== "") {
+      root.savedPreNightLightHex = normalized
+    }
     root.followTheme = false
     if (root.mode === "off" || root.mode === "rainbow") root.mode = "static"
     apply()
@@ -213,6 +260,7 @@ Item {
 
   function setBrightness(value) {
     var val = Math.max(0, Math.min(100, Math.round(value)))
+    root.isBatterySaverIdled = false
     root.brightness = val
     if (val === 0) {
       root.mode = "off"
@@ -227,6 +275,7 @@ Item {
   }
 
   function setMode(next) {
+    root.isBatterySaverIdled = false
     if (next === "theme") {
       root.followTheme = true
       root.mode = "static"
@@ -245,6 +294,11 @@ Item {
 
   function feedSni() {
     if (!sniProc.running) return
+    if (root.isNightLightEffective) {
+      sniProc.write("mode static " + root.nightLightHex + "\n")
+      sniProc.write("tooltip " + root.tooltip + "\n")
+      return
+    }
     var sniMode = root.mode
     if (root.followTheme && root.mode !== "off" && root.mode !== "rainbow") {
       sniMode = "theme"
@@ -382,7 +436,9 @@ Item {
         followTheme: root.followTheme,
         themeTarget: root.themeTarget,
         batterySaver: root.batterySaver,
+        batterySaverIdled: root.isBatterySaverIdled,
         nightLightSync: root.nightLightSync,
+        nightLightActive: root.isNightLightEffective,
         opened: root.opened,
         vrgb: root.vrgbAvailable
       })
@@ -440,7 +496,9 @@ Item {
         followTheme: root.followTheme,
         themeTarget: root.themeTarget,
         batterySaver: root.batterySaver,
+        batterySaverIdled: root.isBatterySaverIdled,
         nightLightSync: root.nightLightSync,
+        nightLightActive: root.isNightLightEffective,
         opened: root.opened,
         vrgb: root.vrgbAvailable
       })
@@ -478,7 +536,18 @@ Item {
   onBrightnessChanged: scheduleSettingsSave()
   onFollowThemeChanged: scheduleSettingsSave()
   onThemeTargetChanged: scheduleSettingsSave()
-  onBatterySaverChanged: scheduleSettingsSave()
+  onBatterySaverChanged: {
+    scheduleSettingsSave()
+    updateBatterySaverBrightness()
+    if (!root.batterySaver && root.isBatterySaverIdled) {
+      root.isBatterySaverIdled = false
+      if (root.followTheme && root.mode !== "off" && root.mode !== "rainbow") {
+        root.applyThemeAccent()
+      } else {
+        root.apply()
+      }
+    }
+  }
   onNightLightSyncChanged: scheduleSettingsSave()
 
   Timer {
@@ -540,7 +609,13 @@ Item {
     root.settingsLoaded = true
 
     if (hasSettings) {
-      if (root.followTheme) {
+      updateBatterySaverBrightness()
+      if (root.isNightLightEffective) {
+        if (root.savedPreNightLightHex === "") {
+          root.savedPreNightLightHex = root.hex
+        }
+        root.apply()
+      } else if (root.followTheme) {
         root.applyThemeAccent()
       } else {
         root.apply()
@@ -696,28 +771,34 @@ Item {
             radius: Style.space(10)
             color: root.mode === "off"
               ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
-              : (root.mode === "rainbow"
-                  ? Util.alpha(Color.accent, 0.15)
-                  : Util.alpha(Model.colorValue(root.hex), 0.18))
+              : (root.isNightLightEffective
+                  ? Util.alpha(Model.colorValue(root.nightLightHex), 0.18)
+                  : (root.mode === "rainbow"
+                      ? Util.alpha(Color.accent, 0.15)
+                      : Util.alpha(Model.colorValue(root.hex), 0.18)))
             border.width: 1
             border.color: root.mode === "off"
               ? Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.15)
-              : (root.mode === "rainbow"
-                  ? Color.accent
-                  : Model.colorValue(root.hex))
+              : (root.isNightLightEffective
+                  ? Model.colorValue(root.nightLightHex)
+                  : (root.mode === "rainbow"
+                      ? Color.accent
+                      : Model.colorValue(root.hex)))
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
 
             Text {
               anchors.centerIn: parent
-              text: Model.modeIcon(root.mode, root.followTheme)
+              text: root.isNightLightEffective ? "󰖔" : Model.modeIcon(root.mode, root.followTheme)
               font.family: root.fontFamily
               font.pixelSize: Style.font.icon
               color: root.mode === "off"
                 ? Qt.darker(root.foreground, 1.8)
-                : (root.mode === "rainbow"
-                    ? Color.accent
-                    : Model.colorValue(root.hex))
+                : (root.isNightLightEffective
+                    ? Model.colorValue(root.nightLightHex)
+                    : (root.mode === "rainbow"
+                        ? Color.accent
+                        : Model.colorValue(root.hex)))
             }
           }
 
@@ -741,6 +822,7 @@ Item {
             Text {
               text: {
                 if (root.mode === "off") return "DISABLED · OFF"
+                if (root.isNightLightEffective) return "NIGHT LIGHT · #" + root.nightLightHex + " · " + root.brightness + "%"
                 if (root.mode === "rainbow") return "DYNAMIC · RAINBOW · " + root.brightness + "%"
                 var tag = root.followTheme
                   ? (root.themeTarget === "foreground" ? "THEME TEXT" : "THEME ACCENT")
@@ -909,7 +991,7 @@ Item {
             }
 
             Text {
-              text: Model.hexLabel(root.hex)
+              text: Model.hexLabel(root.activeDisplayHex)
               color: Qt.darker(root.foreground, 1.4)
               font.family: root.fontFamily
               font.pixelSize: Style.font.caption
@@ -935,7 +1017,7 @@ Item {
                 Layout.fillWidth: true
                 Layout.preferredHeight: Style.space(38)
 
-                readonly property bool isSelected: !root.followTheme && root.mode === "static" && root.hex === modelData.hex
+                readonly property bool isSelected: !root.followTheme && (root.mode === "static" || root.isNightLightEffective) && root.activeDisplayHex === modelData.hex
                 readonly property bool isLight: Model.isLightColor(modelData.hex)
 
                 Rectangle {
@@ -1003,7 +1085,7 @@ Item {
               width: Style.space(32)
               height: Style.space(32)
               radius: Style.space(6)
-              color: Model.colorValue(root.hex)
+              color: Model.colorValue(root.activeDisplayHex)
               border.width: 1
               border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.3)
               anchors.verticalCenter: parent.verticalCenter
@@ -1021,7 +1103,7 @@ Item {
             TextField {
               id: hexField
               width: Style.space(120)
-              text: root.hex
+              text: root.activeDisplayHex
               maximumLength: 6
               font.capitalization: Font.AllUppercase
               validator: RegularExpressionValidator { regularExpression: /[0-9a-fA-F]{6}/ }
@@ -1167,7 +1249,7 @@ Item {
             selected: root.batterySaver
             active: root.batterySaver
             onClicked: root.batterySaver = !root.batterySaver
-            tooltipText: "Cap brightness to 33% when battery is low (≤25%)"
+            tooltipText: "Turn off backlight after 15s idle & cap at 33% on low battery (≤25%)"
           }
 
           Button {
