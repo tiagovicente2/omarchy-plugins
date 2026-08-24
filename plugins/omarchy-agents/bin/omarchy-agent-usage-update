@@ -48,7 +48,7 @@ collect() {
 
 declare -A seen_collectors
 pids=()
-for dir in "${OMARCHY_PATH:-/usr/share/omarchy}/bin" "$HOME/.local/bin"; do
+for dir in "$HOME/.local/bin" "${OMARCHY_PATH:-/usr/share/omarchy}/bin"; do
   [[ -d $dir ]] || continue
   for collector in "$dir"/omarchy-agent-usage-*; do
     [[ -x $collector ]] || continue
