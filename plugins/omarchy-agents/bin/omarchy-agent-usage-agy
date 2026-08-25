@@ -5,7 +5,8 @@
 """Collect Antigravity (agy) usage into one display-ready JSON record.
 
 Extracts token usage, model stats, and prompt counts from Antigravity's local
-SQLite conversation databases (~/.gemini/antigravity-cli/conversations/*.db).
+SQLite conversation databases (~/.gemini/antigravity-cli/conversations/*.db)
+and queries authoritative quota limits directly from `agy`.
 """
 
 from __future__ import annotations
@@ -16,7 +17,9 @@ import glob
 import json
 import os
 import sqlite3
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +29,7 @@ AUTH_HELP = "Run `agy` to authenticate."
 
 SCAN_REUSE_SECONDS = 20
 LIMITS_ONLY_REUSE_SECONDS = 900
+LIMITS_PROBE_REUSE_SECONDS = 30
 
 
 def config_path() -> Path:
@@ -70,10 +74,18 @@ def parse_token_limit(val: Any, default: int) -> int:
     return default
 
 
-def cache_file() -> Path:
+def cache_dir_path() -> Path:
     cache_dir = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "omarchy" / "agent-usage"
     cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir / f"{AGENT_ID}-scan.json"
+    return cache_dir
+
+
+def cache_file() -> Path:
+    return cache_dir_path() / f"{AGENT_ID}-scan.json"
+
+
+def limits_cache_file() -> Path:
+    return cache_dir_path() / f"{AGENT_ID}-limits.json"
 
 
 def read_cache(max_age_seconds: int) -> dict[str, Any] | None:
@@ -96,12 +108,123 @@ def read_cache(max_age_seconds: int) -> dict[str, Any] | None:
 def write_cache(data: dict[str, Any]) -> None:
     try:
         path = cache_file()
-        tmp = path.with_suffix(".tmp")
-        with open(tmp, "w", encoding="utf-8") as f:
-            json.dump(data, f)
+        handle_fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+        tmp = Path(tmp_name)
+        with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle)
+        tmp.chmod(0o644)
         tmp.replace(path)
     except Exception:
         pass
+
+
+def read_limits_cache(max_age_seconds: int) -> list[dict[str, Any]] | None:
+    path = limits_cache_file()
+    if not path.is_file():
+        return None
+    try:
+        mtime = path.stat().st_mtime
+        if max_age_seconds > 0 and (dt.datetime.now().timestamp() - mtime) > max_age_seconds:
+            return None
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict) and "groups" in data:
+                return data["groups"]
+    except Exception:
+        pass
+    return None
+
+
+def write_limits_cache(groups: list[dict[str, Any]]) -> None:
+    try:
+        path = limits_cache_file()
+        handle_fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+        tmp = Path(tmp_name)
+        with os.fdopen(handle_fd, "w", encoding="utf-8") as handle:
+            json.dump({"updatedAt": dt.datetime.now(dt.timezone.utc).isoformat(), "groups": groups}, handle)
+        tmp.chmod(0o644)
+        tmp.replace(path)
+    except Exception:
+        pass
+
+
+def probe_agy_quota(max_age_seconds: int = LIMITS_PROBE_REUSE_SECONDS, force: bool = False) -> list[dict[str, Any]] | None:
+    """Fetch authoritative quota groups from agy CLI."""
+    if not force:
+        cached = read_limits_cache(max_age_seconds)
+        if cached is not None:
+            return cached
+
+    try:
+        proc = subprocess.run(
+            ["agy", "-p", "/quota", "--output-format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if proc.returncode == 0 and proc.stdout:
+            data = json.loads(proc.stdout)
+            groups = data.get("command", {}).get("data", {}).get("groups", [])
+            if groups and isinstance(groups, list):
+                write_limits_cache(groups)
+                return groups
+    except Exception:
+        pass
+
+    # Fallback to stale cached quota if available
+    return read_limits_cache(max_age_seconds=86400)
+
+
+def format_quota_limits(groups: list[dict[str, Any]], quota_mode: str = "both") -> list[dict[str, Any]]:
+    """Format agy quota groups into normalized limit records for the UI panel."""
+    mode = (quota_mode or "both").strip().lower()
+    limits: list[dict[str, Any]] = []
+
+    for g in groups:
+        gname = str(g.get("name") or "")
+        is_gemini = "gemini" in gname.lower()
+
+        if mode in ("gemini", "google") and not is_gemini:
+            continue
+        if mode in ("claude", "3p", "other", "gpt") and is_gemini:
+            continue
+
+        prefix = "Gemini" if is_gemini else ("Claude & GPT" if ("claude" in gname.lower() or "gpt" in gname.lower()) else gname)
+
+        # Sort so 5-hour / session comes first, then weekly
+        buckets = sorted(
+            g.get("buckets") or [],
+            key=lambda b: 0 if (
+                "5h" in str(b.get("window", "")).lower()
+                or "session" in str(b.get("window", "")).lower()
+                or "hour" in str(b.get("name", "")).lower()
+            ) else 1,
+        )
+
+        for b in buckets:
+            rem = float(b.get("remaining_fraction", 1.0))
+            used = round(max(0.0, min(1.0, 1.0 - rem)), 4)
+            window = str(b.get("window") or "")
+            reset_time = str(b.get("reset_time") or "")
+            if mode in ("gemini", "google") and not is_gemini:
+                continue
+            if mode in ("claude", "3p", "other", "gpt") and is_gemini:
+                continue
+
+            is_session = window in ("5h", "session", "hour") or "hour" in str(b.get("name", "")).lower()
+
+            title = f"{prefix} Session" if is_session else f"{prefix} Weekly"
+            label = f"{prefix} Session (5-hour)" if is_session else f"{prefix} Weekly (7-day)"
+
+            limits.append({
+                "label": label,
+                "title": title,
+                "group": prefix,
+                "percent": used,
+                "resetsAt": reset_time,
+            })
+
+    return limits
 
 
 def decode_varint(data: bytes, pos: int) -> tuple[int, int]:
@@ -174,7 +297,7 @@ def get_active_account() -> str:
     return "Google AI"
 
 
-def scan_agy_usage() -> dict[str, Any]:
+def scan_agy_usage(quota_mode: str = "both", force: bool = False) -> dict[str, Any]:
     now = dt.datetime.now()
     now_ts = int(now.timestamp())
     today = now.strftime("%Y-%m-%d")
@@ -191,12 +314,11 @@ def scan_agy_usage() -> dict[str, Any]:
     total_prompts = 0
     total_sessions: set[str] = set()
 
-    # Load custom limits configuration if present
     config = read_config()
     session_window_hours = int(config.get("sessionWindowHours", 5))
     weekly_window_days = int(config.get("weeklyWindowDays", 7))
-    session_limit_tokens = parse_token_limit(config.get("sessionLimitTokens"), 50_000_000)
-    weekly_limit_tokens = parse_token_limit(config.get("weeklyLimitTokens"), 250_000_000)
+    session_limit_tokens = parse_token_limit(config.get("sessionLimitTokens"), 0)
+    weekly_limit_tokens = parse_token_limit(config.get("weeklyLimitTokens"), 0)
 
     session_cutoff = now_ts - session_window_hours * 3600
     weekly_cutoff = now_ts - weekly_window_days * 86400
@@ -325,41 +447,48 @@ def scan_agy_usage() -> dict[str, Any]:
     today_total = sum(today_tokens_by_model.values())
     tier_label = get_active_account()
 
-    limits = []
+    limits: list[dict[str, Any]] = []
 
-    # Rolling session limit
-    if session_limit_tokens > 0:
-        session_tokens_sum = sum(t[1] for t in session_turns)
-        session_percent = round(session_tokens_sum / session_limit_tokens, 4)
-        if session_turns:
-            oldest_s = min(t[0] for t in session_turns)
-            reset_s = oldest_s + session_window_hours * 3600
-            session_reset_iso = dt.datetime.fromtimestamp(reset_s, tz=dt.timezone.utc).isoformat()
-        else:
-            session_reset_iso = dt.datetime.fromtimestamp(now_ts + session_window_hours * 3600, tz=dt.timezone.utc).isoformat()
+    # 1. Authoritative quota from agy CLI
+    quota_groups = probe_agy_quota(max_age_seconds=LIMITS_PROBE_REUSE_SECONDS, force=force)
+    if quota_groups:
+        limits = format_quota_limits(quota_groups, quota_mode)
 
-        limits.append({
-            "label": f"Session ({session_window_hours}-hour)",
-            "percent": min(1.0, session_percent),
-            "resetsAt": session_reset_iso,
-        })
+    # 2. Fallback to token estimates if no authoritative limits and manual limits configured
+    if not limits and (session_limit_tokens > 0 or weekly_limit_tokens > 0):
+        if session_limit_tokens > 0:
+            session_tokens_sum = sum(t[1] for t in session_turns)
+            session_percent = round(session_tokens_sum / session_limit_tokens, 4)
+            if session_turns:
+                oldest_s = min(t[0] for t in session_turns)
+                reset_s = oldest_s + session_window_hours * 3600
+                session_reset_iso = dt.datetime.fromtimestamp(reset_s, tz=dt.timezone.utc).isoformat()
+            else:
+                session_reset_iso = dt.datetime.fromtimestamp(now_ts + session_window_hours * 3600, tz=dt.timezone.utc).isoformat()
 
-    # Rolling weekly limit
-    if weekly_limit_tokens > 0:
-        weekly_tokens_sum = sum(t[1] for t in weekly_turns)
-        weekly_percent = round(weekly_tokens_sum / weekly_limit_tokens, 4)
-        if weekly_turns:
-            oldest_w = min(t[0] for t in weekly_turns)
-            reset_w = oldest_w + weekly_window_days * 86400
-            weekly_reset_iso = dt.datetime.fromtimestamp(reset_w, tz=dt.timezone.utc).isoformat()
-        else:
-            weekly_reset_iso = dt.datetime.fromtimestamp(now_ts + weekly_window_days * 86400, tz=dt.timezone.utc).isoformat()
+            limits.append({
+                "label": f"Session ({session_window_hours}-hour)",
+                "title": "Session",
+                "percent": min(1.0, session_percent),
+                "resetsAt": session_reset_iso,
+            })
 
-        limits.append({
-            "label": f"Weekly ({weekly_window_days}-day)",
-            "percent": min(1.0, weekly_percent),
-            "resetsAt": weekly_reset_iso,
-        })
+        if weekly_limit_tokens > 0:
+            weekly_tokens_sum = sum(t[1] for t in weekly_turns)
+            weekly_percent = round(weekly_tokens_sum / weekly_limit_tokens, 4)
+            if weekly_turns:
+                oldest_w = min(t[0] for t in weekly_turns)
+                reset_w = oldest_w + weekly_window_days * 86400
+                weekly_reset_iso = dt.datetime.fromtimestamp(reset_w, tz=dt.timezone.utc).isoformat()
+            else:
+                weekly_reset_iso = dt.datetime.fromtimestamp(now_ts + weekly_window_days * 86400, tz=dt.timezone.utc).isoformat()
+
+            limits.append({
+                "label": f"Weekly ({weekly_window_days}-day)",
+                "title": "Weekly",
+                "percent": min(1.0, weekly_percent),
+                "resetsAt": weekly_reset_iso,
+            })
 
     record = {
         "schemaVersion": 1,
@@ -393,19 +522,31 @@ def main() -> None:
     parser.add_argument("--limits-only", action="store_true", help="Reuse cached scan if possible")
     args = parser.parse_args()
 
-    max_age = SCAN_REUSE_SECONDS
-    if args.limits_only:
-        max_age = LIMITS_ONLY_REUSE_SECONDS
-    if args.force:
-        max_age = 0
+    config = read_config()
+    quota_mode = str(config.get("quotaMode") or config.get("quotaGroup") or "both")
 
-    cached = read_cache(max_age) if max_age > 0 else None
-    if cached:
-        json.dump(cached, sys.stdout)
-        sys.stdout.write("\n")
-        return
+    # Fast path for --limits-only: reuse scan cache and refresh limits
+    if args.limits_only and not args.force:
+        cached = read_cache(LIMITS_ONLY_REUSE_SECONDS)
+        if cached is not None:
+            groups = probe_agy_quota(max_age_seconds=LIMITS_PROBE_REUSE_SECONDS, force=False)
+            if groups:
+                cached["limits"] = format_quota_limits(groups, quota_mode)
+            cached["updatedAt"] = dt.datetime.now(dt.timezone.utc).isoformat()
+            write_cache(cached)
+            json.dump(cached, sys.stdout)
+            sys.stdout.write("\n")
+            return
 
-    record = scan_agy_usage()
+    # Normal reuse for recent scans
+    if not args.force:
+        cached = read_cache(SCAN_REUSE_SECONDS)
+        if cached is not None:
+            json.dump(cached, sys.stdout)
+            sys.stdout.write("\n")
+            return
+
+    record = scan_agy_usage(quota_mode=quota_mode, force=args.force)
     write_cache(record)
     json.dump(record, sys.stdout)
     sys.stdout.write("\n")

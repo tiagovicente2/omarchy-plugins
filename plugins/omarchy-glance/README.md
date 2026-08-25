@@ -32,7 +32,10 @@ ln -sfn ~/Projects/omarchy-plugins/plugins/omarchy-glance ~/.config/omarchy/plug
 # 2. Set Glance as your bar center anchor
 ~/.config/omarchy/plugins/omarchy-glance/setup/center-anchor
 
-# 3. Rescan Omarchy plugins
+# 3. Enable automatic background calendar sync (every 5 mins)
+~/.config/omarchy/plugins/omarchy-glance/setup/sync-timer
+
+# 4. Rescan Omarchy plugins
 omarchy-shell shell rescanPlugins
 ```
 

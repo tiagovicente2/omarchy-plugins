@@ -52,6 +52,21 @@ omarchy bar set omarchy-agents syncMode "On"
 omarchy bar set omarchy-agents syncDir "~/Sync/agent-usage"
 ```
 
+### Antigravity (AGY) Quota Configuration
+
+Antigravity quota limits can be customized in `~/.config/omarchy/agents/agy.json`:
+
+```json
+{
+  "quotaMode": "both"
+}
+```
+
+- `"both"` (default): Shows both **Gemini Models** (Session and Weekly) and **Claude & GPT models** limits.
+- `"gemini"`: Shows only **Gemini Models** quota limits.
+- `"claude"`: Shows only **Claude & GPT models** quota limits.
+
+
 ---
 
 ## Interactions & IPC

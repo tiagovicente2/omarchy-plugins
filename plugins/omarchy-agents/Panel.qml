@@ -36,6 +36,34 @@ Panel {
   // panel keeps telling the truth while it sits open.
   property double nowMs: Date.now()
 
+  readonly property var rawLimits: provider ? (provider.limits || []) : []
+  readonly property var limitGroups: extractLimitGroups(rawLimits)
+  property string selectedLimitGroup: "Gemini"
+
+  function extractLimitGroups(list) {
+    if (!list || !Array.isArray(list)) return []
+    var groups = []
+    var seen = {}
+    for (var i = 0; i < list.length; i++) {
+      var g = list[i] ? list[i].group : ""
+      if (g && !seen[g]) {
+        seen[g] = true
+        groups.push(g)
+      }
+    }
+    return groups
+  }
+
+  function toggleLimitGroup(groupName) {
+    if (selectedLimitGroup === groupName) {
+      selectedLimitGroup = "Both"
+    } else if (selectedLimitGroup === "Both") {
+      selectedLimitGroup = groupName
+    } else {
+      selectedLimitGroup = groupName
+    }
+  }
+
   readonly property var limits: limitWindows(provider)
   readonly property var models: modelRows(provider)
   readonly property var headline: bindingWindow(provider)
@@ -113,10 +141,23 @@ Panel {
     if (!p) return []
     var out = []
     var list = p.limits || []
+    var groups = extractLimitGroups(list)
+    if (groups.length > 1 && selectedLimitGroup !== "" && selectedLimitGroup !== "Both" && selectedLimitGroup !== "All") {
+      list = list.filter(function(entry) {
+        return !entry.group || entry.group === selectedLimitGroup
+      })
+    }
     for (var i = 0; i < list.length; i++) {
       var entry = list[i] || {}
       var percent = Number(entry.percent)
-      if (percent >= 0) out.push(limitWindow(entry.label, percent, entry.resetsAt, entry.title))
+      if (percent >= 0) {
+        var displayTitle = entry.title || ""
+        if (groups.length > 1 && selectedLimitGroup !== "Both" && selectedLimitGroup !== "All" && entry.group) {
+          displayTitle = String(entry.title || entry.label).replace(entry.group, "").trim()
+          if (displayTitle === "") displayTitle = windowTitle(entry.label)
+        }
+        out.push(limitWindow(entry.label, percent, entry.resetsAt, displayTitle))
+      }
     }
     return out
   }
@@ -229,26 +270,41 @@ Panel {
     return peak
   }
 
+  function modelMatchesGroup(modelId, groupName) {
+    if (!groupName || groupName === "Both" || groupName === "All" || groupName === "") return true
+    var id = String(modelId || "").toLowerCase()
+    var name = usage.friendlyModelName(modelId).toLowerCase()
+    var isGemini = id.indexOf("gemini") >= 0 || name.indexOf("gemini") >= 0
+    if (groupName === "Gemini") return isGemini
+    if (groupName === "Claude & GPT" || groupName === "3p" || groupName === "Claude" || groupName === "GPT") return !isGemini
+    return true
+  }
+
   function modelRows(p) {
     var usageByModel = p ? (p.modelUsage || {}) : {}
     var rows = []
+    var groups = extractLimitGroups(rawLimits)
     for (var id in usageByModel) {
+      if (groups.length > 1 && !modelMatchesGroup(id, selectedLimitGroup)) continue
       var bucket = usageByModel[id] || {}
       var input = Number(bucket.inputTokens || 0)
       var output = Number(bucket.outputTokens || 0)
       var cacheRead = Number(bucket.cacheReadInputTokens || 0)
       var cacheWrite = Number(bucket.cacheCreationInputTokens || 0)
-      rows.push({
-        name: usage.friendlyModelName(id),
-        total: input + output + cacheRead + cacheWrite,
-        input: input,
-        output: output,
-        cacheRead: cacheRead,
-        cacheWrite: cacheWrite
-      })
+      var total = input + output + cacheRead + cacheWrite
+      if (total > 0) {
+        rows.push({
+          name: usage.friendlyModelName(id),
+          total: total,
+          input: input,
+          output: output,
+          cacheRead: cacheRead,
+          cacheWrite: cacheWrite
+        })
+      }
     }
     rows.sort(function(a, b) { return b.total - a.total })
-    return rows.slice(0, 4)
+    return rows.slice(0, 3)
   }
 
   function modelTooltip(row) {
@@ -358,7 +414,7 @@ Panel {
     contentWidth: panel.fittedContentWidth(Style.space(380))
     // Taller than the control panels on purpose: this one is a dashboard, and
     // the whole point is reading limits and history without scrolling.
-    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(640))
+    contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(720))
 
     PanelKeyCatcher {
       id: keyCatcher
@@ -586,7 +642,7 @@ Panel {
 
           Column {
             id: limitsSection
-            visible: root.limits.length > 0
+            visible: root.rawLimits.length > 0
             width: parent.width
             spacing: Style.space(10)
 
@@ -594,6 +650,43 @@ Panel {
               text: "LIMITS"
               foreground: root.foreground
               fontFamily: root.fontFamily
+            }
+
+            // Sub-buttons when multiple quota groups exist (e.g. Gemini vs Claude & GPT in Antigravity)
+            Row {
+              id: limitGroupSwitch
+              visible: root.limitGroups.length > 1
+              width: parent.width
+              spacing: Style.spacing.md
+
+              readonly property real cellWidth: root.limitGroups.length > 0
+                ? (width - spacing * (root.limitGroups.length - 1)) / root.limitGroups.length
+                : 0
+
+              Repeater {
+                model: root.limitGroups
+
+                Button {
+                  required property var modelData
+                  required property int index
+
+                  readonly property bool isGroupActive: root.selectedLimitGroup === "Both" || root.selectedLimitGroup === "" || root.selectedLimitGroup === modelData
+                  width: limitGroupSwitch.cellWidth
+                  text: modelData
+                  selected: isGroupActive
+                  hasCursor: root.cursorActive && isGroupActive
+                  bordered: true
+                  foreground: root.foreground
+                  fontFamily: root.fontFamily
+                  fontSize: Style.font.caption
+                  verticalPadding: Style.space(4)
+                  onClicked: {
+                    root.cursorActive = true
+                    root.toggleLimitGroup(modelData)
+                  }
+                  onHovered: function(isHovered) { if (isHovered) root.cursorActive = true }
+                }
+              }
             }
 
             Repeater {
