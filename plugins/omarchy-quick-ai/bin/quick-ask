@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+# quick-ask: dispatch a prompt to the selected Omarchy agent/model.
+# Usage: quick-ask <agent> <model> <prompt...>
+# - agent: one of opencode|claude|codex|agy|copilot|grok|pi|omp|ori|crush|auto
+# - model: provider/model for opencode (e.g. openai/gpt-5.6-sol) or empty
+# - prompt: question text
+#
+# Prefers `opencode run` for provider/model routing and JSON streaming.
+# Falls back to native binaries for non-opencode agents.
+set -euo pipefail
+
+agent="${1:-opencode}"
+model="${2:-}"
+shift 2 || true
+prompt="$*"
+
+if [[ -z "${prompt//[[:space:]]/}" ]]; then
+  echo "quick-ask: empty prompt" >&2
+  exit 2
+fi
+
+# Normalize "auto" -> use Omarchy default agent if available
+if [[ "$agent" == "auto" || "$agent" == "" ]]; then
+  if command -v omarchy-default-agent >/dev/null 2>&1; then
+    detected="$(omarchy-default-agent 2>/dev/null || true)"
+    [[ -n "$detected" ]] && agent="$detected" || agent="opencode"
+  else
+    agent="opencode"
+  fi
+fi
+
+# If model is empty, pick a sensible default per agent
+if [[ -z "$model" ]]; then
+  case "$agent" in
+    opencode) model="openai/gpt-5.6-sol" ;;
+    codex) model="" ;;
+    claude) model="" ;;
+    agy) model="" ;;
+    *) model="" ;;
+  esac
+fi
+
+# Helper: ensure opencode is available
+has_opencode() { command -v opencode >/dev/null 2>&1; }
+
+# For opencode-agent we route through `opencode run` so provider/model are honored.
+# For other agents we could still route via opencode if a provider/model is set,
+# but native CLIs give better auth (oauth) for claude/codex/agy.
+case "$agent" in
+  opencode|open-code)
+    if ! has_opencode; then
+      echo "opencode is not installed. Install via: omarchy default agent opencode" >&2
+      exit 3
+    fi
+    if [[ -n "$model" ]]; then
+      exec opencode run --model "$model" --format json "$prompt"
+    else
+      exec opencode run --format json "$prompt"
+    fi
+    ;;
+  claude|claude-code)
+    if command -v claude >/dev/null 2>&1; then
+      # Claude Code headless: `claude --permission-mode auto -- "prompt"`
+      # We use print mode if available, else plain run with limited tools.
+      if claude --help 2>&1 | grep -q "permission-mode"; then
+        exec claude --permission-mode auto -- "$prompt"
+      else
+        exec claude -- "$prompt"
+      fi
+    elif has_opencode && [[ -n "$model" ]]; then
+      exec opencode run --model "$model" --format json "$prompt"
+    else
+      echo "Claude Code not installed. Install via: omarchy default agent claude" >&2
+      exit 3
+    fi
+    ;;
+  codex)
+    if command -v codex >/dev/null 2>&1; then
+      # Codex headless: `codex --approve-for-me -- "prompt"` or `codex exec`
+      # Try `codex` quiet mode, fallback to `codex --approve-for-me`
+      exec codex --approve-for-me -- "$prompt"
+    elif has_opencode && [[ -n "$model" ]]; then
+      exec opencode run --model "$model" --format json "$prompt"
+    else
+      echo "Codex not installed. Install via: omarchy default agent codex" >&2
+      exit 3
+    fi
+    ;;
+  agy|antigravity|gemini|gemini-cli)
+    if command -v agy >/dev/null 2>&1; then
+      # agy is interactive; for one-shot we use `agy --prompt-interactive` via omarchy-agent path
+      # Fallback: try `agy` prompt flag if available
+      exec agy --prompt-interactive "$prompt"
+    elif has_opencode && [[ -n "$model" ]]; then
+      exec opencode run --model "$model" --format json "$prompt"
+    else
+      echo "Antigravity (agy) not installed. Install via: omarchy default agent agy" >&2
+      exit 3
+    fi
+    ;;
+  copilot|github-copilot)
+    if command -v copilot >/dev/null 2>&1; then
+      exec copilot --allow-all --interactive "$prompt"
+    elif has_opencode && [[ -n "$model" ]]; then
+      exec opencode run --model "$model" --format json "$prompt"
+    else
+      echo "Copilot not installed. Install via: omarchy default agent copilot" >&2
+      exit 3
+    fi
+    ;;
+  grok)
+    if command -v grok >/dev/null 2>&1; then
+      exec grok --permission-mode bypassPermissions -- "$prompt"
+    elif has_opencode && [[ -n "$model" ]]; then
+      exec opencode run --model "$model" --format json "$prompt"
+    else
+      echo "Grok not installed. Install via: omarchy default agent grok" >&2
+      exit 3
+    fi
+    ;;
+  pi)
+    if command -v pi >/dev/null 2>&1; then
+      exec pi "$prompt"
+    elif has_opencode && [[ -n "$model" ]]; then
+      exec opencode run --model "$model" --format json "$prompt"
+    else
+      echo "Pi not installed. Install via: omarchy default agent pi" >&2
+      exit 3
+    fi
+    ;;
+  omp|oh-my-pi)
+    if command -v omp >/dev/null 2>&1; then
+      exec omp --auto-approve -- "$prompt"
+    elif has_opencode && [[ -n "$model" ]]; then
+      exec opencode run --model "$model" --format json "$prompt"
+    else
+      echo "Oh My Pi not installed." >&2
+      exit 3
+    fi
+    ;;
+  ori|openrouter)
+    if command -v ori >/dev/null 2>&1; then
+      exec ori code --prompt "$prompt"
+    elif has_opencode && [[ -n "$model" ]]; then
+      exec opencode run --model "$model" --format json "$prompt"
+    else
+      echo "Ori not installed." >&2
+      exit 3
+    fi
+    ;;
+  crush)
+    if command -v crush >/dev/null 2>&1; then
+      exec crush run "$prompt"
+    elif has_opencode && [[ -n "$model" ]]; then
+      exec opencode run --model "$model" --format json "$prompt"
+    else
+      echo "Crush not installed." >&2
+      exit 3
+    fi
+    ;;
+  *)
+    # Unknown agent -> try opencode with model if possible
+    if has_opencode; then
+      if [[ -n "$model" ]]; then
+        exec opencode run --model "$model" --format json "$prompt"
+      else
+        exec opencode run --format json "$prompt"
+      fi
+    else
+      echo "Unsupported agent: $agent" >&2
+      exit 2
+    fi
+    ;;
+esac

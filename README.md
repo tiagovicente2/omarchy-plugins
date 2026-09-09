@@ -12,6 +12,7 @@ A unified collection of personal shell plugins and bar widgets for [Omarchy](htt
 | [**Omarchy Glance**](plugins/omarchy-glance) | `omarchy-glance` | Bar Widget | Centered calendar, Caldir agenda sync with video links, and notification history drawer. |
 | [**Keyboard RGB**](plugins/omarchy-kbd-rgb) | `omarchy-kbd-rgb` | Background Service | ASUS Vivobook RGB backlight tray controller (HID LampArray via VRGB) with dynamic theme sync. |
 | [**Omarchy Agents**](plugins/omarchy-agents) | `omarchy-agents` | Bar Widget | Multi-agent token usage meters, rate limits, and pacing for Claude, Codex, AGY, and Fireworks. |
+| [**Quick AI**](plugins/omarchy-quick-ai) | `omarchy-quick-ai` | Panel | Spotlight overlay for quick questions — pick any Omarchy agent + `provider/model`, get an answer without opening a full TUI. |
 
 ---
 

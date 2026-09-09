@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+# build-models-cache: build per-agent model lists in cache from opencode's models.dev cache
+# Usage: build-models-cache [--refresh] [--json]
+# - Reads ~/.cache/opencode/models.json (4.3M) which contains all providers/models from models.dev
+# - Filters per Omarchy agent and writes ~/.cache/omarchy/quick-ai/models.json
+# - With --refresh, runs `opencode models --refresh` first to fetch latest from models.dev
+set -euo pipefail
+
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/quick-ai"
+CACHE_FILE="$CACHE_DIR/models.json"
+OPENCODE_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/models.json"
+
+mkdir -p "$CACHE_DIR"
+
+if [[ "${1:-}" == "--refresh" ]]; then
+  if command -v opencode >/dev/null 2>&1; then
+    echo "Refreshing opencode models cache from models.dev..." >&2
+    opencode models --refresh >/dev/null 2>&1 || true
+  fi
+fi
+
+# If opencode cache missing, try to create it
+if [[ ! -f "$OPENCODE_CACHE" ]]; then
+  if command -v opencode >/dev/null 2>&1; then
+    echo "No opencode cache, fetching..." >&2
+    opencode models --refresh >/dev/null 2>&1 || true
+  fi
+fi
+
+if [[ ! -f "$OPENCODE_CACHE" ]]; then
+  echo "Warning: opencode cache not found at $OPENCODE_CACHE, using empty fallback" >&2
+  # Create minimal fallback with just the models from `opencode models` command (auth-filtered)
+  if command -v opencode >/dev/null 2>&1; then
+    tmp=$(mktemp)
+    opencode models 2>/dev/null | while IFS= read -r line; do
+      [[ -z "$line" ]] && continue
+      echo "$line"
+    done > "$tmp" || true
+    # Build minimal JSON from that list
+    python3 - "$tmp" "$CACHE_FILE" <<'PY'
+import json, sys, pathlib
+tmp_path, out_path = sys.argv[1], sys.argv[2]
+models = [l.strip() for l in open(tmp_path).read().splitlines() if l.strip()]
+# Build per-agent from the flat list
+by_agent = {
+  "opencode": models,
+  "claude": [m for m in models if "claude" in m.lower()],
+  "codex": [m for m in models if "gpt" in m.lower() or "codex" in m.lower()],
+  "agy": [m for m in models if "gemini" in m.lower()],
+  "copilot": [m for m in models if "copilot" in m.lower()],
+  "grok": [m for m in models if "grok" in m.lower()],
+  "pi": [m for m in models if "pi" in m.lower()],
+  "omp": [m for m in models if "omp" in m.lower()],
+  "ori": [m for m in models if "openrouter" in m.lower()],
+  "crush": [m for m in models if "crush" in m.lower()],
+}
+# Ensure each has at least a few entries
+import os
+os.makedirs(os.path.dirname(out_path), exist_ok=True)
+with open(out_path, 'w') as f:
+  json.dump({"generatedAt": __import__("datetime").datetime.utcnow().isoformat()+"Z", "byAgent": by_agent, "all": models}, f, indent=2)
+print(f"Wrote fallback cache with {len(models)} models", file=sys.stderr)
+PY
+    rm -f "$tmp"
+    if [[ "${2:-}" == "--json" ]]; then cat "$CACHE_FILE"; else echo "Built fallback cache at $CACHE_FILE" >&2; fi
+    exit 0
+  else
+    echo '{"generatedAt":"unknown","byAgent":{},"all":[]}' > "$CACHE_FILE"
+    exit 0
+  fi
+fi
+
+# Build per-agent lists from the full opencode cache (which has all providers, unfiltered)
+python3 - "$OPENCODE_CACHE" "$CACHE_FILE" <<'PY'
+import json, sys
+src, dst = sys.argv[1], sys.argv[2]
+data = json.load(open(src))
+
+# Collect all model ids as "provider/model"
+all_ids = []
+for provider, pdata in data.items():
+  models = pdata.get("models", {}) if isinstance(pdata, dict) else {}
+  for mid in models.keys():
+    # mid is already like "anthropic/claude-opus-4.7" or "deepseek/..." 
+    # For consistency with `opencode models` output which is "provider/model" for some but "provider/model" already,
+    # we keep as is. Some providers have nested ids like "deepseek/deepseek-v4-flash" which is already provider/model.
+    # The opencode cache's top key is provider, and mid is model id which may already include provider prefix or not.
+    # We normalize to ensure it contains a slash: if mid contains "/", use as is, else prefix with provider.
+    if "/" in mid:
+      all_ids.append(mid)
+    else:
+      all_ids.append(f"{provider}/{mid}")
+
+# Deduplicate and sort
+all_ids = sorted(set(all_ids))
+
+def filt(needle):
+  n = needle.lower()
+  return sorted([m for m in all_ids if n in m.lower()])
+
+by_agent = {
+  "opencode": sorted(all_ids),
+  "claude": filt("claude"),
+  "codex": sorted([m for m in all_ids if "gpt" in m.lower() or "codex" in m.lower()]),
+  "agy": filt("gemini"),
+  "copilot": filt("copilot"),
+  "grok": filt("grok"),
+  "pi": filt("pi"),
+  "omp": filt("omp"),
+  "ori": filt("openrouter"),
+  "crush": filt("crush"),
+}
+
+# Ensure at least the known defaults are present even if cache is stale
+fallbacks = {
+  "claude": ["anthropic/claude-sonnet-4-5", "anthropic/claude-opus-4-7", "anthropic/claude-haiku-4-5"],
+  "codex": ["openai/gpt-5.6-sol", "openai/gpt-5.4", "openai/gpt-5.5"],
+  "agy": ["google/gemini-3.7-flash", "google/gemini-3-pro"],
+}
+for k, fb in fallbacks.items():
+  for m in fb:
+    if m not in by_agent[k]:
+      by_agent[k].append(m)
+  by_agent[k] = sorted(set(by_agent[k]))
+
+out = {
+  "generatedAt": __import__("datetime").datetime.utcnow().isoformat()+"Z",
+  "source": src,
+  "all": all_ids,
+  "byAgent": by_agent
+}
+
+import os
+os.makedirs(os.path.dirname(dst), exist_ok=True)
+with open(dst, 'w') as f:
+  json.dump(out, f, indent=2)
+
+if "--json" in sys.argv:
+  print(json.dumps(out, indent=2))
+else:
+  print(f"Built cache at {dst} with {len(all_ids)} total models", file=sys.stderr)
+  for k, v in by_agent.items():
+    print(f"  {k}: {len(v)}", file=sys.stderr)
+PY
+
+if [[ "${1:-}" == "--json" || "${2:-}" == "--json" ]]; then
+  cat "$CACHE_FILE"
+fi

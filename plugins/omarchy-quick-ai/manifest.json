@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "omarchy-quick-ai",
+  "name": "Quick AI",
+  "version": "0.1.0",
+  "author": "Tiago Vicente",
+  "license": "MIT",
+  "description": "Spotlight-style quick question: type a prompt, pick agent + model, get a fast answer in a centered overlay.",
+  "kinds": ["panel"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "panel": "Panel.qml"
+  }
+}
