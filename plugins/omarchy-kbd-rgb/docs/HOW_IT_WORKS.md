@@ -74,7 +74,7 @@ Rather than rendering static system icons or basic color squares, `sni.py` imple
 
 ## 5. Smart Automations
 
-- **Battery Saver**: Combines Wayland idle monitoring (`Quickshell.Wayland.IdleMonitor`) and UPower battery status. When enabled, turns off the keyboard backlight after 15 seconds of user inactivity to conserve power, instantly restoring previous lighting on keypress or mouse movement. In addition, when running on battery and charge drops to $\le 25\%$, brightness is automatically capped at 33%.
+- **Mandatory Battery Limit**: Combines Wayland idle monitoring (`Quickshell.Wayland.IdleMonitor`) and UPower AC/battery status. While the laptop is running on battery, it always caps effective keyboard brightness at 33%, turns the backlight off after 15 seconds of inactivity, and restores it on input. Plugging into AC immediately restores the user's configured brightness and disables the idle shutoff.
 - **Night Light Warm Tint**: Directly monitors Omarchy's `omarchy.nightlight` / `hyprsunset` service and reacts dynamically to toggle events. When active, shifts the keyboard backlight to zero-blue warm amber (`#FF7700`) and seamlessly restores the user's custom color or theme accent once Night Light is dismissed or toggled off.
 
 ---

@@ -11,7 +11,7 @@ RGB keyboard backlight control service and control panel for **ASUS Vivobook** l
 - **🌈 Smooth Rainbow Spectrum Cycle**: Animated RGB color cycling that smoothly transitions your keyboard backlight through the full color spectrum.
 - **⌨️ Vector Tray Icon**: Dynamic 22×22 StatusNotifierItem keyboard icon rendered in Cairo, illuminated with your active color, dynamic rainbow wave, or off state.
 - **⚡ Hardware Hotkey Sync**: Full bidirectional sync with laptop Fn brightness hotkeys (<kbd>Fn</kbd>+<kbd>F7</kbd> / <kbd>Fn</kbd>+<kbd>F4</kbd>) via UPower DBus.
-- **🔋 Battery Saver**: Turns off keyboard backlight after 15s of idle to save power, and caps brightness to 33% when battery level is low ($\le 25\%$).
+- **🔋 Mandatory Battery Limit**: While the laptop is on battery, the keyboard is always limited to 33% brightness and turns off after 15s of idle. AC-powered behavior is unchanged.
 - **🌙 Night Light Warm Tint**: Automatically transitions to zero-blue warm amber (`#FF7700`) during Night Light to reduce eye strain, reacting in real time to toggle events.
 - **💾 Boot & Theme Persistence**: Automatically persists your color, theme target, and brightness preferences across reboots and shell reloads.
 
@@ -68,6 +68,10 @@ omarchy-shell omarchy-kbd-rgb status                   # Output JSON status
 ```
 
 ---
+
+## 💻 Laptop Compatibility
+
+See [**Compatibility**](docs/COMPATIBILITY.md) for the verified laptop models, unsupported lookalikes, and the `vrgb --debug status` check to run before installing.
 
 ## 📖 Architecture & Deep Dive
 

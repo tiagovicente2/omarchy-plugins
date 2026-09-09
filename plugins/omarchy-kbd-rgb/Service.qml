@@ -25,11 +25,10 @@ Item {
   property bool followTheme: false
   property string themeTarget: "accent" // "accent" | "foreground"
   property int rainbowHue: 0
-  property bool batterySaver: false
   property bool nightLightSync: false
   property string savedPreNightLightHex: ""
-  property int savedPreBatterySaverBrightness: -1
   property bool isBatterySaverIdled: false
+  property bool restoringProfile: false
   property bool opened: false
   property bool persistOnIdle: false
   property var queue: []
@@ -49,13 +48,19 @@ Item {
   }
   readonly property color foreground: Color.popups.text
   readonly property string fontFamily: Style.font.family
+  // The brightness cap is mandatory while running on battery power.
+  readonly property bool isBatterySaverActive: UPower.onBattery
+  readonly property int effectiveBrightness: root.isBatterySaverActive
+    ? Math.min(root.brightness, 33) : root.brightness
 
   readonly property string tooltip: {
+    if (root.isBatterySaverIdled) return "Keyboard: Off (Battery Saver)"
     if (root.mode === "off") return "Keyboard: Off"
-    if (root.isNightLightEffective) return "Keyboard: #" + root.nightLightHex + " (" + root.brightness + "%) (Night Light)"
-    if (root.mode === "rainbow") return "Keyboard: Rainbow (" + root.brightness + "%)"
+    var batterySuffix = root.isBatterySaverActive ? " (Battery Saver)" : ""
+    if (root.isNightLightEffective) return "Keyboard: #" + root.nightLightHex + " (" + root.effectiveBrightness + "%) (Night Light)" + batterySuffix
+    if (root.mode === "rainbow") return "Keyboard: Rainbow (" + root.effectiveBrightness + "%)" + batterySuffix
     var suffix = root.followTheme ? (root.themeTarget === "foreground" ? " (Theme Text)" : " (Theme Accent)") : ""
-    return "Keyboard: #" + root.hex.toUpperCase() + " (" + root.brightness + "%)" + suffix
+    return "Keyboard: #" + root.hex.toUpperCase() + " (" + root.effectiveBrightness + "%)" + suffix + batterySuffix
   }
 
   readonly property string modeLabel: {
@@ -129,39 +134,34 @@ Item {
     }
   }
 
-  // Battery Saver (cap brightness on low battery & 15s idle timeout)
-  readonly property bool isLowBattery: {
-    var dev = UPower.displayDevice
-    return !!(UPower.onBattery && dev && dev.isPresent && dev.percentage <= 25)
-  }
-
-  function updateBatterySaverBrightness() {
+  // Battery Saver (dim while on battery & turn off after 15s idle)
+  function updateBatterySaverState() {
     if (!root.settingsLoaded || root.hydrating) return
-    if (root.batterySaver && root.isLowBattery && root.mode !== "off") {
-      if (root.savedPreBatterySaverBrightness < 0) {
-        root.savedPreBatterySaverBrightness = root.brightness
-      }
-      if (root.brightness > 33) {
-        root.setBrightness(33)
-      }
-    } else if ((!root.batterySaver || !root.isLowBattery) && root.savedPreBatterySaverBrightness >= 0) {
-      root.setBrightness(root.savedPreBatterySaverBrightness)
-      root.savedPreBatterySaverBrightness = -1
+
+    if (!root.isBatterySaverActive && root.isBatterySaverIdled) {
+      root.isBatterySaverIdled = false
     }
+
+    // The active-state signal can run before effectiveBrightness's binding
+    // has reevaluated. Defer applying so hardware receives the new value.
+    Qt.callLater(function() {
+      if (!root.settingsLoaded || root.hydrating) return
+      root.apply()
+    })
   }
 
-  onIsLowBatteryChanged: updateBatterySaverBrightness()
+  onIsBatterySaverActiveChanged: updateBatterySaverState()
 
   IdleMonitor {
     id: batterySaverIdleMonitor
-    enabled: root.batterySaver && root.mode !== "off"
+    enabled: root.isBatterySaverActive && root.mode !== "off"
     timeout: 15
     respectInhibitors: true
     onIsIdleChanged: root.handleBatterySaverIdleChanged()
   }
 
   function handleBatterySaverIdleChanged() {
-    if (!root.batterySaver || root.mode === "off") {
+    if (!root.isBatterySaverActive || root.mode === "off") {
       if (root.isBatterySaverIdled) {
         root.isBatterySaverIdled = false
         apply()
@@ -172,14 +172,13 @@ Item {
     if (batterySaverIdleMonitor.isIdle) {
       root.isBatterySaverIdled = true
       enqueue(["vrgb", "off"])
-    } else {
-      if (root.isBatterySaverIdled) {
-        root.isBatterySaverIdled = false
-        if (root.followTheme && root.mode !== "off" && root.mode !== "rainbow") {
-          root.applyThemeAccent()
-        } else {
-          apply()
-        }
+      feedSni()
+    } else if (root.isBatterySaverIdled) {
+      root.isBatterySaverIdled = false
+      if (root.followTheme && root.mode !== "off" && root.mode !== "rainbow") {
+        root.applyThemeAccent()
+      } else {
+        apply()
       }
     }
   }
@@ -212,7 +211,7 @@ Item {
       root.rainbowHue = (root.rainbowHue + 3) % 360
       var currentHex = Model.hsvToHex(root.rainbowHue, 1.0, 1.0)
       root.hex = currentHex
-      root.enqueue(["vrgb", "set", currentHex, String(root.brightness)])
+      root.enqueue(["vrgb", "set", currentHex, String(root.effectiveBrightness)])
       root.feedSni()
     }
   }
@@ -229,13 +228,13 @@ Item {
     if (root.mode === "off") {
       cmd = ["vrgb", "off"]
     } else if (root.isNightLightEffective) {
-      cmd = ["vrgb", "set", root.nightLightHex, String(root.brightness)]
+      cmd = ["vrgb", "set", root.nightLightHex, String(root.effectiveBrightness)]
     } else if (root.mode === "rainbow") {
       var rainbowHex = Model.hsvToHex(root.rainbowHue, 1.0, 1.0)
       root.hex = rainbowHex
-      cmd = ["vrgb", "set", rainbowHex, String(root.brightness)]
+      cmd = ["vrgb", "set", rainbowHex, String(root.effectiveBrightness)]
     } else {
-      cmd = ["vrgb", "set", root.hex, String(root.brightness)]
+      cmd = ["vrgb", "set", root.hex, String(root.effectiveBrightness)]
     }
     root.applyError = ""
     root.persistOnIdle = true
@@ -294,6 +293,11 @@ Item {
 
   function feedSni() {
     if (!sniProc.running) return
+    if (root.isBatterySaverIdled) {
+      sniProc.write("mode off " + root.hex + "\n")
+      sniProc.write("tooltip " + root.tooltip + "\n")
+      return
+    }
     if (root.isNightLightEffective) {
       sniProc.write("mode static " + root.nightLightHex + "\n")
       sniProc.write("tooltip " + root.tooltip + "\n")
@@ -309,7 +313,7 @@ Item {
 
   function syncHwBrightnessToHelper() {
     if (!sniProc.running) return
-    var target = root.mode === "off" ? 0 : root.brightness
+    var target = root.mode === "off" ? 0 : root.effectiveBrightness
     sniProc.write("set_hw_brightness " + target + "\n")
   }
 
@@ -343,7 +347,10 @@ Item {
         }
       }
       root.brightness = pct
-      enqueue(["vrgb", "brightness", String(pct)])
+      enqueue(["vrgb", "brightness", String(root.effectiveBrightness)])
+      if (root.isBatterySaverActive && pct > root.effectiveBrightness) {
+        syncHwBrightnessToHelper()
+      }
       feedSni()
     }
     root.persistOnIdle = true
@@ -372,12 +379,20 @@ Item {
 
   function onStatus(raw) {
     var state = Model.parseStatus(raw)
-    if (!root.settingsLoaded) {
+    if (!root.settingsLoaded || root.restoringProfile) {
       if (state.hex) root.hex = state.hex
       if (state.brightness >= 0) root.brightness = state.brightness
       if (state.mode) root.mode = state.mode
     }
-    feedSni()
+    root.restoringProfile = false
+
+    // A profile restored on a first run can exceed the battery cap; immediately
+    // reapply the restored state so the cap reaches both VRGB and UPower.
+    if (root.settingsLoaded && root.isBatterySaverActive) {
+      apply()
+    } else {
+      feedSni()
+    }
   }
 
   function restore() {
@@ -399,7 +414,8 @@ Item {
     function applyThemeAccent(): string { root.setMode("theme"); return "ok" }
     function setThemeTarget(target: string): string { root.setThemeTarget(target); return "ok" }
     function setFollowTheme(enabled: bool): string { root.followTheme = enabled; if (enabled) root.applyThemeAccent(); return "ok" }
-    function setBatterySaver(enabled: bool): string { root.batterySaver = enabled; root.scheduleSettingsSave(); return "ok" }
+    // Kept as a no-op for callers of earlier plugin versions; battery limiting is always active on battery power.
+    function setBatterySaver(enabled: bool): string { return "always-on" }
     function setNightLightSync(enabled: bool): string { root.nightLightSync = enabled; root.scheduleSettingsSave(); return "ok" }
     function stepBrightness(delta: int): string {
       var next = Math.max(0, Math.min(100, root.brightness + delta))
@@ -431,11 +447,13 @@ Item {
     function status(): string {
       return JSON.stringify({
         hex: root.hex,
-        brightness: root.brightness,
+        brightness: root.effectiveBrightness,
+        configuredBrightness: root.brightness,
         mode: root.followTheme ? "theme" : root.mode,
         followTheme: root.followTheme,
         themeTarget: root.themeTarget,
-        batterySaver: root.batterySaver,
+        batterySaver: true,
+        batterySaverActive: root.isBatterySaverActive,
         batterySaverIdled: root.isBatterySaverIdled,
         nightLightSync: root.nightLightSync,
         nightLightActive: root.isNightLightEffective,
@@ -459,7 +477,8 @@ Item {
     function applyThemeAccent(): string { root.setMode("theme"); return "ok" }
     function setThemeTarget(target: string): string { root.setThemeTarget(target); return "ok" }
     function setFollowTheme(enabled: bool): string { root.followTheme = enabled; if (enabled) root.applyThemeAccent(); return "ok" }
-    function setBatterySaver(enabled: bool): string { root.batterySaver = enabled; root.scheduleSettingsSave(); return "ok" }
+    // Kept as a no-op for callers of earlier plugin versions; battery limiting is always active on battery power.
+    function setBatterySaver(enabled: bool): string { return "always-on" }
     function setNightLightSync(enabled: bool): string { root.nightLightSync = enabled; root.scheduleSettingsSave(); return "ok" }
     function stepBrightness(delta: int): string {
       var next = Math.max(0, Math.min(100, root.brightness + delta))
@@ -491,11 +510,13 @@ Item {
     function status(): string {
       return JSON.stringify({
         hex: root.hex,
-        brightness: root.brightness,
+        brightness: root.effectiveBrightness,
+        configuredBrightness: root.brightness,
         mode: root.followTheme ? "theme" : root.mode,
         followTheme: root.followTheme,
         themeTarget: root.themeTarget,
-        batterySaver: root.batterySaver,
+        batterySaver: true,
+        batterySaverActive: root.isBatterySaverActive,
         batterySaverIdled: root.isBatterySaverIdled,
         nightLightSync: root.nightLightSync,
         nightLightActive: root.isNightLightEffective,
@@ -536,18 +557,6 @@ Item {
   onBrightnessChanged: scheduleSettingsSave()
   onFollowThemeChanged: scheduleSettingsSave()
   onThemeTargetChanged: scheduleSettingsSave()
-  onBatterySaverChanged: {
-    scheduleSettingsSave()
-    updateBatterySaverBrightness()
-    if (!root.batterySaver && root.isBatterySaverIdled) {
-      root.isBatterySaverIdled = false
-      if (root.followTheme && root.mode !== "off" && root.mode !== "rainbow") {
-        root.applyThemeAccent()
-      } else {
-        root.apply()
-      }
-    }
-  }
   onNightLightSyncChanged: scheduleSettingsSave()
 
   Timer {
@@ -581,9 +590,6 @@ Item {
         if (typeof data.followTheme === "boolean") {
           root.followTheme = data.followTheme
         }
-        if (typeof data.batterySaver === "boolean") {
-          root.batterySaver = data.batterySaver
-        }
         if (typeof data.nightLightSync === "boolean") {
           root.nightLightSync = data.nightLightSync
         }
@@ -609,7 +615,7 @@ Item {
     root.settingsLoaded = true
 
     if (hasSettings) {
-      updateBatterySaverBrightness()
+      updateBatterySaverState()
       if (root.isNightLightEffective) {
         if (root.savedPreNightLightHex === "") {
           root.savedPreNightLightHex = root.hex
@@ -621,6 +627,7 @@ Item {
         root.apply()
       }
     } else {
+      root.restoringProfile = true
       root.restore()
     }
   }
@@ -634,7 +641,6 @@ Item {
         brightness: root.brightness,
         followTheme: root.followTheme,
         themeTarget: root.themeTarget,
-        batterySaver: root.batterySaver,
         nightLightSync: root.nightLightSync
       }
       settingsFile.setText(JSON.stringify(payload, null, 2) + "\n")
@@ -822,12 +828,12 @@ Item {
             Text {
               text: {
                 if (root.mode === "off") return "DISABLED · OFF"
-                if (root.isNightLightEffective) return "NIGHT LIGHT · #" + root.nightLightHex + " · " + root.brightness + "%"
-                if (root.mode === "rainbow") return "DYNAMIC · RAINBOW · " + root.brightness + "%"
+                if (root.isNightLightEffective) return "NIGHT LIGHT · #" + root.nightLightHex + " · " + root.effectiveBrightness + "%"
+                if (root.mode === "rainbow") return "DYNAMIC · RAINBOW · " + root.effectiveBrightness + "%"
                 var tag = root.followTheme
                   ? (root.themeTarget === "foreground" ? "THEME TEXT" : "THEME ACCENT")
                   : Model.colorName(root.hex).toUpperCase()
-                return tag + " · " + root.brightness + "%"
+                return tag + " · " + root.effectiveBrightness + "%"
               }
               color: Qt.darker(root.foreground, 1.4)
               font.family: root.fontFamily
@@ -1144,7 +1150,7 @@ Item {
                 spacing: Style.space(6)
 
                 Text {
-                  text: Model.brightnessIcon(root.brightness, root.mode)
+                  text: Model.brightnessIcon(root.effectiveBrightness, root.mode)
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.iconSmall
                   color: Qt.darker(root.foreground, 1.4)
@@ -1159,7 +1165,7 @@ Item {
               }
 
               Text {
-                text: root.mode === "off" ? "0%" : root.brightness + "%"
+                text: root.mode === "off" ? "0%" : root.effectiveBrightness + "%"
                 color: Qt.darker(root.foreground, 1.4)
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.caption
@@ -1173,10 +1179,10 @@ Item {
               id: brightnessSlider
               width: parent.width
               minimum: 0
-              maximum: 100
+              maximum: root.isBatterySaverActive ? 33 : 100
               step: 5
               integer: true
-              value: root.mode === "off" ? 0 : root.brightness
+              value: root.mode === "off" ? 0 : root.effectiveBrightness
               onMoved: function(v) {
                 root.brightness = Math.round(v)
               }
@@ -1210,8 +1216,9 @@ Item {
                   horizontalPadding: Style.space(4)
                   verticalPadding: Style.space(4)
                   bordered: true
-                  selected: (modelData.val === 0 && root.mode === "off") || (root.mode !== "off" && Math.abs(root.brightness - modelData.val) <= 15)
-                  active: (modelData.val === 0 && root.mode === "off") || (root.mode !== "off" && Math.abs(root.brightness - modelData.val) <= 15)
+                  enabled: !root.isBatterySaverActive || modelData.val <= 33
+                  selected: (modelData.val === 0 && root.mode === "off") || (root.mode !== "off" && Math.abs(root.effectiveBrightness - modelData.val) <= 15)
+                  active: (modelData.val === 0 && root.mode === "off") || (root.mode !== "off" && Math.abs(root.effectiveBrightness - modelData.val) <= 15)
                   onClicked: {
                     if (modelData.val === 0) {
                       root.setMode("off")
@@ -1238,7 +1245,7 @@ Item {
 
           Button {
             width: parent.autoBtnWidth
-            text: "Battery Saver"
+            text: root.isBatterySaverActive ? "Battery Limit · On" : "Battery Limit"
             iconText: "󰁹"
             fontSize: Style.font.caption
             foreground: root.foreground
@@ -1246,10 +1253,10 @@ Item {
             horizontalPadding: Style.space(6)
             verticalPadding: Style.space(6)
             bordered: true
-            selected: root.batterySaver
-            active: root.batterySaver
-            onClicked: root.batterySaver = !root.batterySaver
-            tooltipText: "Turn off backlight after 15s idle & cap at 33% on low battery (≤25%)"
+            enabled: false
+            selected: true
+            active: root.isBatterySaverActive
+            tooltipText: "Always limits keyboard brightness to 33% and turns it off after 15s idle while on battery"
           }
 
           Button {
