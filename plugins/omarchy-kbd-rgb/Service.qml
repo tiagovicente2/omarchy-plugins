@@ -57,6 +57,9 @@ Item {
   readonly property int rgbIdleTimeout: root.onBattery
     ? (root.batterySaver ? 10 : 15)
     : (root.batterySaver ? 30 : 0)
+  readonly property bool idleMonitorEnabled: root.mode !== "off" && root.rgbIdleTimeout > 0
+  property int armedIdleTimeout: 0
+  property bool idleMonitorActive: false
 
   readonly property string tooltip: {
     if (root.isBatterySaverIdled) return "Keyboard: Off (Idle)"
@@ -139,10 +142,24 @@ Item {
     }
   }
 
+  // Recreate the monitor after policy changes. Quickshell 0.3 only arms idle
+  // notifications when the monitor is created enabled with a fixed timeout.
+  function resetIdleMonitor() {
+    if (!root.settingsLoaded || root.hydrating) return
+    root.idleMonitorActive = false
+    root.armedIdleTimeout = 0
+    Qt.callLater(function() {
+      if (!root.settingsLoaded || root.hydrating) return
+      root.armedIdleTimeout = root.idleMonitorEnabled ? root.rgbIdleTimeout : 0
+      root.idleMonitorActive = root.armedIdleTimeout > 0
+    })
+  }
+
   // Switching power source or saver policy restores RGB, then uses the new idle timeout.
   function updatePowerBrightness() {
     if (!root.settingsLoaded || root.hydrating) return
     root.isBatterySaverIdled = false
+    root.resetIdleMonitor()
     Qt.callLater(function() {
       if (!root.settingsLoaded || root.hydrating) return
       root.apply()
@@ -155,17 +172,42 @@ Item {
     scheduleSettingsSave()
   }
 
-  IdleMonitor {
-    id: batterySaverIdleMonitor
-    enabled: root.mode !== "off" && root.rgbIdleTimeout > 0
-    timeout: root.rgbIdleTimeout
-    // Battery Saver must follow the configured timeout even while another app inhibits idle.
-    respectInhibitors: false
-    onIsIdleChanged: root.handleBatterySaverIdleChanged()
+  Loader {
+    id: batterySaverIdleMonitorLoader
+    active: root.idleMonitorActive
+    sourceComponent: root.armedIdleTimeout === 10 ? idle10Monitor
+      : (root.armedIdleTimeout === 15 ? idle15Monitor : idle30Monitor)
   }
 
-  function handleBatterySaverIdleChanged() {
-    if (!batterySaverIdleMonitor.enabled) {
+  Component {
+    id: idle10Monitor
+    IdleMonitor {
+      timeout: 10
+      respectInhibitors: false
+      onIsIdleChanged: root.handleBatterySaverIdleChanged(isIdle)
+    }
+  }
+
+  Component {
+    id: idle15Monitor
+    IdleMonitor {
+      timeout: 15
+      respectInhibitors: false
+      onIsIdleChanged: root.handleBatterySaverIdleChanged(isIdle)
+    }
+  }
+
+  Component {
+    id: idle30Monitor
+    IdleMonitor {
+      timeout: 30
+      respectInhibitors: false
+      onIsIdleChanged: root.handleBatterySaverIdleChanged(isIdle)
+    }
+  }
+
+  function handleBatterySaverIdleChanged(isIdle) {
+    if (!root.idleMonitorEnabled) {
       if (root.isBatterySaverIdled) {
         root.isBatterySaverIdled = false
         apply()
@@ -173,7 +215,7 @@ Item {
       return
     }
 
-    if (batterySaverIdleMonitor.isIdle) {
+    if (isIdle) {
       root.isBatterySaverIdled = true
       enqueue(["vrgb", "off"])
       feedSni()
@@ -393,8 +435,10 @@ Item {
     }
     root.restoringProfile = false
 
-    if (root.settingsLoaded) apply()
-    else feedSni()
+    if (root.settingsLoaded) {
+      resetIdleMonitor()
+      apply()
+    } else feedSni()
   }
 
   function restore() {
@@ -455,6 +499,8 @@ Item {
         batterySaver: root.batterySaver,
         rgbIdleTimeout: root.rgbIdleTimeout,
         batterySaverIdled: root.isBatterySaverIdled,
+        idleMonitorEnabled: root.idleMonitorEnabled,
+        idleMonitorIdle: !!(batterySaverIdleMonitorLoader.item && batterySaverIdleMonitorLoader.item.isIdle),
         mode: root.followTheme ? "theme" : root.mode,
         followTheme: root.followTheme,
         themeTarget: root.themeTarget,
@@ -519,6 +565,8 @@ Item {
         batterySaver: root.batterySaver,
         rgbIdleTimeout: root.rgbIdleTimeout,
         batterySaverIdled: root.isBatterySaverIdled,
+        idleMonitorEnabled: root.idleMonitorEnabled,
+        idleMonitorIdle: !!(batterySaverIdleMonitorLoader.item && batterySaverIdleMonitorLoader.item.isIdle),
         mode: root.followTheme ? "theme" : root.mode,
         followTheme: root.followTheme,
         themeTarget: root.themeTarget,
@@ -554,7 +602,10 @@ Item {
   property bool settingsLoaded: false
   property bool hydrating: false
 
-  onModeChanged: scheduleSettingsSave()
+  onModeChanged: {
+    scheduleSettingsSave()
+    resetIdleMonitor()
+  }
   onHexChanged: {
     if (root.mode !== "rainbow") scheduleSettingsSave()
   }
@@ -631,6 +682,7 @@ Item {
     root.settingsLoaded = true
 
     if (hasSettings) {
+      root.resetIdleMonitor()
       if (root.isNightLightEffective) {
         if (root.savedPreNightLightHex === "") {
           root.savedPreNightLightHex = root.hex

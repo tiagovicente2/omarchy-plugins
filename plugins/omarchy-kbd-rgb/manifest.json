@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "omarchy-kbd-rgb",
   "name": "Keyboard RGB",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "author": "Tiago Vicente",
   "license": "MIT",
   "description": "ASUS Vivobook keyboard RGB control from a system tray icon (HID LampArray via VRGB), with boot persistence.",
