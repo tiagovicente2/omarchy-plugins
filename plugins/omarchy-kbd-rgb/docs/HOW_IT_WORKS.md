@@ -74,7 +74,8 @@ Rather than rendering static system icons or basic color squares, `sni.py` imple
 
 ## 5. Smart Automations
 
-- **Per-Power Brightness**: UPower AC/battery status selects an independently persisted AC or battery brightness preference. Switching power sources applies that side's saved value unchanged; the plugin imposes no brightness cap or idle shutoff.
+- **Per-Power Brightness**: UPower AC/battery status selects an independently persisted AC or battery brightness preference. Switching power sources applies that side's saved value unchanged; the plugin imposes no brightness cap.
+- **Battery Saver Idle Policy**: With Battery Saver enabled, RGB turns off after 10 seconds on battery or 30 seconds on AC. With it disabled, RGB stays on with AC power and turns off after 15 seconds on battery. Input restores RGB from the active source's saved brightness.
 - **Night Light Warm Tint**: Directly monitors Omarchy's `omarchy.nightlight` / `hyprsunset` service and reacts dynamically to toggle events. When active, shifts the keyboard backlight to zero-blue warm amber (`#FF7700`) and seamlessly restores the user's custom color or theme accent once Night Light is dismissed or toggled off.
 
 ---
