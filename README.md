@@ -1,54 +1,27 @@
-# Omarchy Plugins
+# Omarchy Plugins (Deprecated)
 
-A unified collection of personal shell plugins and bar widgets for [Omarchy](https://omarchy.org/).
+This monorepo has been migrated and deprecated. Each plugin is now developed and maintained in its own dedicated, standalone repository:
 
----
-
-## Included Plugins
-
-| Plugin | ID | Kind | Description |
-| :--- | :--- | :--- | :--- |
-| [**Battery Protection**](plugins/battery-protection) | `battery-protection` | Bar Widget | 80% charge threshold protection toggle and power profile management. |
-| [**Omarchy Glance**](plugins/omarchy-glance) | `omarchy-glance` | Bar Widget | Centered calendar, Caldir agenda sync with video links, and notification history drawer. |
-| [**Keyboard RGB**](plugins/omarchy-kbd-rgb) | `omarchy-kbd-rgb` | Background Service | ASUS Vivobook RGB backlight tray controller (HID LampArray via VRGB) with dynamic theme sync. |
-| [**Omarchy Agents**](plugins/omarchy-agents) | `omarchy-agents` | Bar Widget | Multi-agent token usage meters, rate limits, and pacing for Claude, Codex, AGY, and Fireworks. |
-| [**Quick AI**](plugins/omarchy-quick-ai) | `omarchy-quick-ai` | Panel | Spotlight overlay for quick questions — pick any Omarchy agent + `provider/model`, get an answer without opening a full TUI. |
+| Plugin | Repository | Description |
+| :--- | :--- | :--- |
+| **Battery Protection** | [tiagovicente2/battery-protection](https://github.com/tiagovicente2/battery-protection) | 80% charge threshold protection toggle and power profile management. |
+| **Omarchy Glance** | [tiagovicente2/omarchy-glance](https://github.com/tiagovicente2/omarchy-glance) | Centered calendar, Caldir agenda sync with video links, and notification history drawer. |
+| **Keyboard RGB** | [tiagovicente2/omarchy-kbd-rgb](https://github.com/tiagovicente2/omarchy-kbd-rgb) | ASUS Vivobook RGB backlight tray controller (HID LampArray via VRGB) with dynamic theme sync. |
+| **Omarchy Agents** | [tiagovicente2/omarchy-agents](https://github.com/tiagovicente2/omarchy-agents) | Multi-agent token usage meters, rate limits, and pacing for Claude, Codex, AGY, and Fireworks. |
+| **Quick AI** | [tiagovicente2/omarchy-quick-ai](https://github.com/tiagovicente2/omarchy-quick-ai) | Spotlight overlay for quick questions without opening a full TUI. |
 
 ---
 
-## Installation
+## Installation & Updates
 
-### Automated with Dotfiles
-
-Managed automatically via the personal dotfiles package installer:
+Plugin installation and synchronization are managed automatically through personal [dotfiles](https://github.com/tiagovicente2/dotfiles) via:
 
 ```bash
 install-omarchy-plugins
 ```
 
-### Manual Installation (All Plugins)
-
-To install or link all plugins into your Omarchy environment at once:
+To install any plugin individually using Omarchy's native plugin manager:
 
 ```bash
-# 1. Clone the monorepo
-git clone https://github.com/tiagovicente2/omarchy-plugins.git ~/Projects/omarchy-plugins
-
-# 2. Symlink each plugin into Omarchy's config
-for plugin in ~/Projects/omarchy-plugins/plugins/*/; do
-  ln -sfn "$plugin" ~/.config/omarchy/plugins/"$(basename "$plugin")"
-done
-
-# 3. Run helper scripts
-~/.config/omarchy/plugins/battery-protection/install-helper.sh
-~/.config/omarchy/plugins/omarchy-agents/install-helper.sh
-
-# 4. Rescan Omarchy plugins
-omarchy-shell shell rescanPlugins
+omarchy plugin add <repo-url> --enable
 ```
-
----
-
-## License
-
-All plugins in this repository are distributed under the [MIT License](LICENSE).
